@@ -8,8 +8,9 @@ import {LANGUAGES, PRISMS, POINT_TYPES, translate, abbreviation, prismAbbreviati
 const root=new URL("../",import.meta.url);
 const output=new URL("../.sites-runtime/pdf-check/",import.meta.url);
 await mkdir(output,{recursive:true});
-await build({entryPoints:[new URL("../app/page.tsx",import.meta.url).pathname],outfile:new URL("app.mjs",output).pathname,bundle:true,platform:"node",format:"esm",jsx:"automatic",packages:"external",logLevel:"silent"});
-const {buildProtocolPdf,buildPrintPages,targetRemark}=await import(new URL("app.mjs",output).href);
+await build({entryPoints:{pdf:new URL("../app/protocol-pdf.ts",import.meta.url).pathname,print:new URL("../app/protocol-print.ts",import.meta.url).pathname},outdir:output.pathname,outExtension:{".js":".mjs"},bundle:true,platform:"node",format:"esm",jsx:"automatic",packages:"external",logLevel:"silent"});
+const {buildProtocolPdf}=await import(new URL("pdf.mjs",output).href);
+const {buildPrintPages,buildPageMetadata,targetRemark}=await import(new URL("print.mjs",output).href);
 const fonts={regular:(await readFile(new URL("public/fonts/DejaVuSans.ttf",root))).toString("base64"),bold:(await readFile(new URL("public/fonts/DejaVuSans-Bold.ttf",root))).toString("base64")};
 const logo="data:image/png;base64,"+(await readFile(new URL("public/ait-logo.png",root))).toString("base64");
 const protocol={id:"fixture",createdAt:"2026-09-14T07:00:00Z",updatedAt:"2026-09-14T07:00:00Z",meta:{project:"Київ Köln ñ è",projectNumber:"2026-TEST",date:"2026-09-14",startTime:"07:15",endTime:"",instrument:"Leica TS12",crew:"Олексій Müller",temperature:"18,5",pressure:"1013",fpSynced:"14.09.2026",fpFile:"Тест.gsi",showCompanyLogo:true},stations:[{id:"sp1",point:"SP_Україна",instrumentHeight:"1,73456",targets:PRISMS.map(([code],i)=>({id:`target${i}`,point:`Пункт_${i+1}`,height:"0,1004",remark:code,pointType:POINT_TYPES[i%POINT_TYPES.length],isBacksight:i===0,isConnectionPoint:i===1,createdAt:"2026-09-14T07:00:00Z"}))},{id:"sp2",point:"SP_Äñè",instrumentHeight:"1.300",targets:[{id:"custom",point:"Пункт_ЇЄҐ",height:"-0,0252",remark:"Власна ñ è",pointType:"",isBacksight:false,isConnectionPoint:false,createdAt:"2026-09-14T07:00:00Z"}]}]};
@@ -101,7 +102,6 @@ test("station pagination still keeps station blocks together and continues overs
 });
 
 test("following sheets use their first station time and persistent, inherited weather", async () => {
-  const {buildPageMetadata} = await import(new URL("app.mjs",output).href);
   const targets = (prefix, count) => Array.from({length:count}, (_,i)=>({...protocol.stations[0].targets[0],id:prefix+i,point:prefix+i}));
   const record = structuredClone(protocol);
   record.stations = [
