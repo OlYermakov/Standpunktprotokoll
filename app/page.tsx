@@ -2,29 +2,16 @@
 
 import { assetUrl } from "./asset-url";
 
-import { useEffect, useMemo, useRef, useState } from "react";
-import { jsPDF } from "jspdf";
-import { DEFAULT_LANGUAGE } from "./default-language";
+import { memo, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { LanguageProvider, LanguageSwitcher, useLanguage } from "./i18n-context";
 import { InstructionGuide } from "./instructions";
 import { protocolPointSuggestions, lastInstrumentHeightSuggestions } from "./protocol-points";
-import { abbreviation, prismAbbreviation, formatDate, formatBackupDate, countLabel, translate, LOCALES, remarkChoices, pointTypeChoices, PRISMS, prismConstant, type Language, type MessageKey, type MessageParams } from "./i18n";
-import { loadPdfFonts, registerPdfFonts, type PdfFonts } from "./pdf-fonts";
+import { abbreviation, prismAbbreviation, formatDate, formatBackupDate, countLabel, translate, LOCALES, remarkChoices, pointTypeChoices, type Language, type MessageKey, type MessageParams } from "./i18n";
+import { loadPdfFonts } from "./pdf-fonts";
+import { buildPageMetadata, buildPrintPages, PRINT_ROWS_PER_PANEL, protocolLegendEntries, targetRemark, type Protocol, type ProtocolMeta, type Station, type Target } from "./protocol-print";
 
-type Target = {
-  id: string; point: string; height: string; remark: string; pointType: string;
-  isBacksight: boolean; isConnectionPoint: boolean; createdAt: string;
-};
-type Station = {
-  id: string; point: string; instrumentHeight: string; startTime?: string;
-  targets: Target[];
-};
-type ProtocolMeta = {
-  project: string; projectNumber: string; date: string; startTime: string; endTime: string;
-  instrument: string; crew: string; temperature: string; pressure: string; fpSynced: string; fpFile: string;
-  showCompanyLogo: boolean;
-};
-type Protocol = { id: string; createdAt: string; updatedAt: string; meta: ProtocolMeta; stations: Station[]; pageConditions?: Record<string, { temperature?: string; pressure?: string }> };
+const loadProtocolPdf = () => import("./protocol-pdf");
+
 type SavedCombination = {
   id: string; point: string; height: string; remark: string; pointType: string;
   isBacksight: boolean; isConnectionPoint: boolean; useCount: number; lastUsedAt: string;
@@ -84,29 +71,7 @@ const STATE_STORE = "state";
 const SNAPSHOT_STORE = "snapshots";
 const STORE_RECORD_KEY = "current-store";
 const MAX_SNAPSHOTS = 12;
-const AIT_LOGO_URL = assetUrl("/ait-logo.png");
-let aitLogoDataUriPromise: Promise<string> | null = null;
-
-function loadAitLogoDataUri() {
-  if (!aitLogoDataUriPromise) {
-    aitLogoDataUriPromise = fetch(AIT_LOGO_URL)
-      .then((response) => {
-        if (!response.ok) throw new Error("AIT logo could not be loaded");
-        return response.blob();
-      })
-      .then((blob) => new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(String(reader.result));
-        reader.onerror = () => reject(reader.error ?? new Error("AIT logo could not be read"));
-        reader.readAsDataURL(blob);
-      }))
-      .catch((error) => {
-        aitLogoDataUriPromise = null;
-        throw error;
-      });
-  }
-  return aitLogoDataUriPromise;
-}
+const PERSIST_DELAY_MS = 300;
 
 function id() {
   return globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
@@ -154,14 +119,6 @@ function createInitialStore(): Store {
 
 const normalizeHeight = (value: string) => value.trim().replace(".", ",");
 
-function formatProtocolHeight(value: string, language: Language) {
-  const trimmed = value.trim();
-  if (!trimmed) return "";
-  const numeric = Number(trimmed.replace(",", "."));
-  if (!Number.isFinite(numeric)) return trimmed;
-  const roundedMillimeters = Math.round((numeric + Number.EPSILON) * 1000) / 1000;
-  return roundedMillimeters.toFixed(3).replace(".", language === "en" ? "." : ",");
-}
 
 function rememberCombination(items: SavedCombination[], target: TargetForm) {
   const point = target.point.trim();
@@ -233,17 +190,30 @@ function normalizeStore(value: unknown): Store | null {
   };
 }
 
+let databasePromise: Promise<IDBDatabase> | null = null;
+
+// One connection serves every autosave instead of reopening the database per keystroke.
 function openAppDatabase() {
-  return new Promise<IDBDatabase>((resolve, reject) => {
+  if (!databasePromise) databasePromise = new Promise<IDBDatabase>((resolve, reject) => {
     const request = indexedDB.open(DATABASE_NAME, DATABASE_VERSION);
     request.onupgradeneeded = () => {
       const database = request.result;
       if (!database.objectStoreNames.contains(STATE_STORE)) database.createObjectStore(STATE_STORE);
       if (!database.objectStoreNames.contains(SNAPSHOT_STORE)) database.createObjectStore(SNAPSHOT_STORE, { keyPath: "id" });
     };
-    request.onsuccess = () => resolve(request.result);
+    request.onsuccess = () => {
+      const database = request.result;
+      const forget = () => { databasePromise = null; };
+      database.onversionchange = () => { database.close(); forget(); };
+      database.onclose = forget;
+      resolve(database);
+    };
     request.onerror = () => reject(request.error ?? new Error("IndexedDB unavailable"));
+  }).catch((error) => {
+    databasePromise = null;
+    throw error;
   });
+  return databasePromise;
 }
 
 async function readIndexedDbStore() {
@@ -253,7 +223,6 @@ async function readIndexedDbStore() {
     const request = transaction.objectStore(STATE_STORE).get(STORE_RECORD_KEY);
     request.onsuccess = () => resolve(normalizeStore(request.result));
     request.onerror = () => reject(request.error ?? new Error("Stored protocol could not be read"));
-    transaction.oncomplete = () => database.close();
   });
 }
 
@@ -262,8 +231,8 @@ async function writeIndexedDbStore(store: Store) {
   return new Promise<void>((resolve, reject) => {
     const transaction = database.transaction(STATE_STORE, "readwrite");
     transaction.objectStore(STATE_STORE).put(store, STORE_RECORD_KEY);
-    transaction.oncomplete = () => { database.close(); resolve(); };
-    transaction.onerror = () => { database.close(); reject(transaction.error ?? new Error("Protocol could not be stored")); };
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => { reject(transaction.error ?? new Error("Protocol could not be stored")); };
   });
 }
 
@@ -279,8 +248,8 @@ async function saveSnapshot(store: Store) {
       const snapshots = (allRequest.result as StoreSnapshot[]).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
       snapshots.slice(MAX_SNAPSHOTS).forEach((entry) => objectStore.delete(entry.id));
     };
-    transaction.oncomplete = () => { database.close(); resolve(); };
-    transaction.onerror = () => { database.close(); reject(transaction.error ?? new Error("Snapshot could not be stored")); };
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => { reject(transaction.error ?? new Error("Snapshot could not be stored")); };
   });
 }
 
@@ -291,8 +260,21 @@ async function listSnapshots() {
     const request = transaction.objectStore(SNAPSHOT_STORE).getAll();
     request.onsuccess = () => resolve((request.result as StoreSnapshot[]).sort((a, b) => b.createdAt.localeCompare(a.createdAt)));
     request.onerror = () => reject(request.error ?? new Error("Snapshots could not be read"));
-    transaction.oncomplete = () => database.close();
   });
+}
+
+let pendingStore: Store | null = null;
+
+function flushPendingStore() {
+  const store = pendingStore;
+  if (!store) return;
+  pendingStore = null;
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(store));
+  } catch {
+    // IndexedDB remains the primary store if Safari blocks this mirror.
+  }
+  void writeIndexedDbStore(store).catch(() => undefined);
 }
 
 function hasMeaningfulData(store: Store) {
@@ -342,96 +324,13 @@ function parseLocalizedTime(value: string) {
 
 const protocolLabel = (protocol: Protocol, language: Language) => protocol.meta.project.trim() || `${translate(language, "protocol")} ${formatDate(protocol.meta.date, language)}`;
 const countTargets = (protocol: Protocol) => protocol.stations.reduce((sum, station) => sum + station.targets.length, 0);
-export const targetRemark = (target: Target | undefined, language: Language) => target
-  ? [target.isConnectionPoint ? abbreviation("AP", language) : target.isBacksight ? abbreviation("RB", language) : "", abbreviation(target.pointType, language), prismAbbreviation(target.remark, language)].filter(Boolean).join(" · ")
-  : "";
 
-type LegendEntry = { abbreviation: string; description: string };
-
-function protocolLegendEntries(protocol: Protocol, language: Language): LegendEntry[] {
-  const t = (key: MessageKey, params?: MessageParams) => translate(language, key, params);
-  const REMARK_CHOICES = remarkChoices(language);
-  const POINT_TYPE_CHOICES = pointTypeChoices(language);
-  const PRISM_LEGEND: Record<string, string> = Object.fromEntries(PRISMS.map(([code,key,constant]) => [code, `${t(key)} (${prismConstant(constant, language)} mm)`]));
-  const targets = protocol.stations.flatMap((station) => station.targets);
-  const usedPointTypes = new Set(targets.map((target) => target.pointType).filter(Boolean));
-  const usedPrisms = new Set(targets.map((target) => target.remark).filter((remark) => Boolean(PRISM_LEGEND[remark])));
-  const entries: LegendEntry[] = [];
-  if (targets.some((target) => target.isBacksight)) entries.push({ abbreviation: abbreviation("RB", language), description: t("backsight") });
-  if (targets.some((target) => target.isConnectionPoint)) entries.push({ abbreviation: abbreviation("AP", language), description: t("connection") });
-  POINT_TYPE_CHOICES.forEach((choice) => {
-    if (usedPointTypes.has(choice.value)) entries.push({ abbreviation: abbreviation(choice.value, language), description: choice.detail });
-  });
-  REMARK_CHOICES.forEach((choice) => {
-    if (usedPrisms.has(choice.value)) entries.push({ abbreviation: prismAbbreviation(choice.value, language), description: PRISM_LEGEND[choice.value] });
-  });
-  return entries;
-}
-
-function drawPdfFooter(doc: jsPDF, protocol: Protocol, pageIndex: number, pageCount: number, language: Language) {
-  const t = (key: MessageKey, params?: MessageParams) => translate(language, key, params);
-  const entries = protocolLegendEntries(protocol, language);
-  const legendX = 5;
-  const legendWidth = 252;
-  const startY = 197.2;
-  const availableHeight = 10;
-  let fontSize = 5.2;
-  let lines: LegendEntry[][] = [];
-  while (fontSize >= 3.8) {
-    doc.setFontSize(fontSize);
-    lines = [];
-    let line: LegendEntry[] = [];
-    let lineWidth = 0;
-    entries.forEach((entry) => {
-      doc.setFont("ProtocolSans", "bold");
-      const abbreviationWidth = doc.getTextWidth(entry.abbreviation);
-      doc.setFont("ProtocolSans", "normal");
-      const entryWidth = abbreviationWidth + doc.getTextWidth(` - ${entry.description}`);
-      const separatorWidth = line.length ? doc.getTextWidth(" · ") : 0;
-      if (line.length && lineWidth + separatorWidth + entryWidth > legendWidth) {
-        lines.push(line);
-        line = [];
-        lineWidth = 0;
-      }
-      lineWidth += (line.length ? doc.getTextWidth(" · ") : 0) + entryWidth;
-      line.push(entry);
-    });
-    if (line.length) lines.push(line);
-    const lineHeight = fontSize * 0.3528 * 1.15;
-    if (lines.length * lineHeight <= availableHeight) break;
-    fontSize -= 0.2;
-  }
-  doc.setTextColor(34, 34, 34);
-  doc.setFontSize(Math.max(3.8, fontSize));
-  doc.setLineHeightFactor(1.15);
-  const lineHeight = Math.max(3.8, fontSize) * 0.3528 * 1.15;
-  lines.forEach((line, lineIndex) => {
-    let x = legendX;
-    line.forEach((entry, entryIndex) => {
-      if (entryIndex) {
-        doc.setFont("ProtocolSans", "normal");
-        doc.text(" · ", x, startY + lineIndex * lineHeight);
-        x += doc.getTextWidth(" · ");
-      }
-      doc.setFont("ProtocolSans", "bold");
-      doc.text(entry.abbreviation, x, startY + lineIndex * lineHeight);
-      x += doc.getTextWidth(entry.abbreviation);
-      doc.setFont("ProtocolSans", "normal");
-      const description = ` - ${entry.description}`;
-      doc.text(description, x, startY + lineIndex * lineHeight);
-      x += doc.getTextWidth(description);
-    });
-  });
-  doc.setFont("ProtocolSans", "normal");
-  doc.setFontSize(5.5);
-  doc.text(t("pageNumber", {page: pageIndex + 1, total: pageCount}), 292, 201.5, { align: "right" });
-}
 
 function Field({ label, value, onChange, type = "text", inputMode, placeholder }: {
   label: string; value: string; onChange: (value: string) => void; type?: string;
   inputMode?: "text" | "decimal" | "numeric"; placeholder?: string;
 }) {
-  const { language, t } = useLanguage();
+  const { language } = useLanguage();
   return (
     <label className="field">
       <span>{label}</span>
@@ -480,7 +379,7 @@ function LocalizedDateTimeField({ label, value, onChange, kind }: {
 function SelectField({ label, value, onChange, options, placeholder: suppliedPlaceholder }: {
   label: string; value: string; onChange: (value: string) => void; options: Choice[]; placeholder?: string;
 }) {
-  const { language, t } = useLanguage();
+  const { t } = useLanguage();
   const [open, setOpen] = useState(false);
   const placeholder = suppliedPlaceholder ?? t("select");
   const selected = options.find((option) => option.value === value);
@@ -535,7 +434,7 @@ function SuggestionField({ label, value, onChange, suggestions, onPick, inputMod
   onPick?: (value: string) => void; inputMode?: "text" | "decimal"; autoFocus?: boolean; placeholder?: string;
   maxSuggestions?: number;
 }) {
-  const { language, t } = useLanguage();
+  const { t } = useLanguage();
   const [open, setOpen] = useState(false);
   const options = suggestions
     .filter((item) => !value || item.toLocaleLowerCase().includes(value.toLocaleLowerCase()))
@@ -563,7 +462,7 @@ function SuggestionField({ label, value, onChange, suggestions, onPick, inputMod
 function Modal({ title, onClose, children, wide = false, full = false }: {
   title: string; onClose: () => void; children: React.ReactNode; wide?: boolean; full?: boolean;
 }) {
-  const { language, t } = useLanguage();
+  const { t } = useLanguage();
   return (
     <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
       <section className={`modal ${wide ? "modal-wide" : ""} ${full ? "modal-full" : ""}`} role="dialog" aria-modal="true"
@@ -595,236 +494,23 @@ function TargetCrosshairIcon() {
   return <svg className="target-crosshair-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeLinecap="round" aria-hidden="true"><circle cx="12" cy="12" r="7.2" /><circle cx="12" cy="12" r="4.2" /><path d="M12 1.5v21M1.5 12h21" /></svg>;
 }
 
-type PrintRow = { stationId?: string; continuationTargetId?: string; stationPoint?: string; instrumentHeight?: string; target?: Target };
 
-const PRINT_ROWS_PER_PANEL = 30;
-const PRINT_PANELS_PER_PAGE = 3;
-
-export function buildPrintPages(protocol: Protocol, language: Language = DEFAULT_LANGUAGE) {
-  const rowsPerPage = PRINT_ROWS_PER_PANEL * PRINT_PANELS_PER_PAGE;
-  const pageRows: PrintRow[][] = [];
-  let currentPage: PrintRow[] = [];
-
-  protocol.stations.forEach((station) => {
-    const targets: Array<Target | undefined> = station.targets.length ? station.targets : [undefined];
-    const targetRows: PrintRow[] = targets.map((target, index) => ({
-      instrumentHeight: index === 0 ? (formatProtocolHeight(station.instrumentHeight, language) || "-") : "",
-      target: target ? { ...target, height: formatProtocolHeight(target.height, language) } : undefined,
-    }));
-    const stationRows: PrintRow[] = [{ stationId: station.id, stationPoint: station.point || "-" }, ...targetRows];
-
-    if (stationRows.length <= rowsPerPage) {
-      if (currentPage.length && currentPage.length + stationRows.length > rowsPerPage) {
-        pageRows.push(currentPage);
-        currentPage = [];
-      }
-      currentPage.push(...stationRows);
-      return;
-    }
-
-    if (currentPage.length) {
-      pageRows.push(currentPage);
-      currentPage = [];
-    }
-    for (let index = 0; index < targetRows.length; index += rowsPerPage - 1) {
-      const continuedTargets = targetRows.slice(index, index + rowsPerPage - 1).map((row, targetIndex) => ({
-        ...row,
-        instrumentHeight: targetIndex === 0 ? (formatProtocolHeight(station.instrumentHeight, language) || "-") : "",
-      }));
-      pageRows.push([{ stationId: station.id, continuationTargetId: index > 0 ? continuedTargets[0]?.target?.id : undefined, stationPoint: station.point || "-" }, ...continuedTargets]);
-    }
-  });
-
-  if (currentPage.length) pageRows.push(currentPage);
-  if (!pageRows.length) pageRows.push([]);
-  return pageRows.map((rows) => Array.from({ length: PRINT_PANELS_PER_PAGE }, (_, panelIndex) =>
-    rows.slice(panelIndex * PRINT_ROWS_PER_PANEL, (panelIndex + 1) * PRINT_ROWS_PER_PANEL)));
+function pdfFilename(protocol: Protocol, language: Language) {
+  const project = protocol.meta.project.trim().replace(/[<>:"/\\|?*\x00-\x1F]+/g, "_") || translate(language, "project");
+  return `Standpunktprotokoll_${project}_${protocol.meta.date || localDate()}.pdf`;
 }
 
-// Weather follows the first station (or continuation target), not a mutable page number.
-export function buildPageMetadata(protocol: Protocol, pages = buildPrintPages(protocol)) {
-  let temperature = protocol.meta.temperature;
-  let pressure = protocol.meta.pressure;
-  return pages.map((page, index) => {
-    const first = page.flat().find(row => row.stationId);
-    const station = protocol.stations.find(item => item.id === first?.stationId);
-    const key = JSON.stringify([first?.stationId ?? "", first?.continuationTargetId ?? ""]);
-    const conditions = index > 0 ? protocol.pageConditions?.[key] : undefined;
-    temperature = conditions?.temperature ?? temperature;
-    pressure = conditions?.pressure ?? pressure;
-    return { key, station, meta: { ...protocol.meta, temperature, pressure,
-      startTime: index === 0 ? protocol.meta.startTime : station?.startTime ?? "" } };
-  });
-}
-
-function fitPdfText(doc: jsPDF, value: string, width: number) {
-  const lines = doc.splitTextToSize(value, width) as string[];
-  return lines[0] ?? "";
-}
-
-function drawPdfMetaField(doc: jsPDF, label: string, value: string, x: number, y: number, width: number) {
-  doc.setTextColor(8, 8, 8);
-  doc.setFont("ProtocolSans", "bold");
-  doc.setFontSize(5.8);
-  const labelWidth = Math.min(doc.getTextWidth(label), width * 0.56);
-  const labelLines = doc.splitTextToSize(label, labelWidth + 0.1) as string[];
-  doc.text(labelLines, x, y + (labelLines.length > 1 ? 1.45 : 3.5), { lineHeightFactor: 1.05 });
-  const lineX = x + labelWidth + 1.2;
-  doc.setLineWidth(0.25);
-  doc.line(lineX, y + 4.1, x + width, y + 4.1);
-  doc.setFont("ProtocolSans", "normal");
-  doc.setFontSize(8);
-  doc.text(fitPdfText(doc, value, Math.max(1, x + width - lineX - 1.5)), lineX + 0.8, y + 3.35);
-}
-
-function drawPdfHeader(doc: jsPDF, protocol: Protocol, logoDataUri: string | undefined, language: Language) {
-  const t = (key: MessageKey, params?: MessageParams) => translate(language, key, params);
-  doc.setTextColor(8, 8, 8);
-  doc.setFont("ProtocolSans", "bold");
-  doc.setFontSize(7.3);
-  doc.text(t("appTitle"), 6, 8);
-
-  drawPdfMetaField(doc, t("project") + ":", protocol.meta.project, 6, 8.6, 69);
-  drawPdfMetaField(doc, t("date") + ":", formatDate(protocol.meta.date, language), 6, 13.8, 69);
-  drawPdfMetaField(doc, t("instrument") + ":", protocol.meta.instrument, 6, 19, 69);
-  drawPdfMetaField(doc, t("fpStatus") + ":", protocol.meta.fpSynced, 6, 24.2, 69);
-
-  drawPdfMetaField(doc, t("projectNumber") + ":", protocol.meta.projectNumber, 83.5, 8.6, 64);
-  drawPdfMetaField(doc, t("time") + ":", protocol.meta.startTime, 83.5, 13.8, 64);
-  drawPdfMetaField(doc, t("crew"), protocol.meta.crew, 83.5, 19, 64);
-  drawPdfMetaField(doc, t("fpFile") + ":", protocol.meta.fpFile, 83.5, 24.2, 64);
-
-  drawPdfMetaField(doc, t("temperature") + ":", protocol.meta.temperature ? `${protocol.meta.temperature} °C` : "", 154.2, 8.6, 42.5);
-  drawPdfMetaField(doc, t("pressure") + ":", protocol.meta.pressure ? `${protocol.meta.pressure} hPa` : "", 203, 8.6, 42.5);
-
-  if (protocol.meta.showCompanyLogo && logoDataUri) {
-    const brandX = 274;
-    const brandWidth = 18;
-    doc.addImage(logoDataUri, "PNG", brandX, 2.5, brandWidth, 9.29, undefined, "FAST");
-    doc.setTextColor(8, 8, 8);
-    doc.setFont("ProtocolSans", "normal");
-    let taglineSize = 4.1;
-    doc.setFontSize(taglineSize);
-    while (doc.getTextWidth(t("companyCaption")) > brandWidth && taglineSize > 2.8) {
-      taglineSize -= 0.1;
-      doc.setFontSize(taglineSize);
-    }
-    doc.text(t("companyCaption"), brandX + brandWidth / 2, 13.6, { align: "center" });
-  }
-}
-
-function drawPdfTable(doc: jsPDF, page: PrintRow[][], language: Language) {
-  const t = (key: MessageKey, params?: MessageParams) => translate(language, key, params);
-  const tableX = 5;
-  const tableY = 31;
-  const tableWidth = 287;
-  const headerHeight = 5.8;
-  const rowHeight = 5.25;
-  const tableHeight = headerHeight + PRINT_ROWS_PER_PANEL * rowHeight;
-  const panelWidth = tableWidth / PRINT_PANELS_PER_PAGE;
-  const columnRatios = [0.255, 0.279, 0.135, 0.331];
-  const headers = [t("stationHeader"), t("target"), t("targetHeight"), t("remark")];
-
-  doc.setFillColor(241, 241, 241);
-  doc.rect(tableX, tableY, tableWidth, headerHeight, "F");
-  doc.setDrawColor(20, 20, 20);
-  doc.setLineWidth(0.22);
-  for (let row = 0; row <= PRINT_ROWS_PER_PANEL; row += 1) {
-    const y = tableY + headerHeight + row * rowHeight;
-    doc.line(tableX, y, tableX + tableWidth, y);
-  }
-
-  for (let group = 0; group < PRINT_PANELS_PER_PAGE; group += 1) {
-    const groupX = tableX + group * panelWidth;
-    let x = groupX;
-    doc.setLineWidth(0.5);
-    doc.line(groupX, tableY, groupX, tableY + tableHeight);
-    columnRatios.slice(0, -1).forEach((ratio) => {
-      x += panelWidth * ratio;
-      doc.setLineWidth(0.22);
-      doc.line(x, tableY, x, tableY + tableHeight);
-    });
-    doc.setLineWidth(0.5);
-    doc.line(groupX + panelWidth, tableY, groupX + panelWidth, tableY + tableHeight);
-  }
-  doc.setLineWidth(0.5);
-  doc.rect(tableX, tableY, tableWidth, tableHeight);
-
-  doc.setTextColor(8, 8, 8);
-  doc.setFont("ProtocolSans", "bold");
-  doc.setFontSize(5.8);
-  for (let group = 0; group < PRINT_PANELS_PER_PAGE; group += 1) {
-    let x = tableX + group * panelWidth;
-    headers.forEach((header, columnIndex) => {
-      const width = panelWidth * columnRatios[columnIndex];
-      let headerFontSize = 5.8;
-      doc.setFontSize(headerFontSize);
-      let headerLines = doc.splitTextToSize(header, width - 1.5) as string[];
-      while (headerLines.length > 2 && headerFontSize > 4.2) {
-        headerFontSize -= 0.2;
-        doc.setFontSize(headerFontSize);
-        headerLines = doc.splitTextToSize(header, width - 1.5) as string[];
-      }
-      doc.text(headerLines, x + width / 2, tableY + (headerLines.length > 1 ? 2.35 : 3.7), { align: "center", lineHeightFactor: 1.05 });
-      x += width;
-    });
-  }
-
-  for (let rowIndex = 0; rowIndex < PRINT_ROWS_PER_PANEL; rowIndex += 1) {
-    for (let group = 0; group < PRINT_PANELS_PER_PAGE; group += 1) {
-      const row = page[group]?.[rowIndex];
-      const target = row?.target;
-      const values = [
-        row?.stationPoint ?? row?.instrumentHeight ?? "",
-        target?.point ?? "",
-        target?.height ?? "",
-        targetRemark(target, language),
-      ];
-      let x = tableX + group * panelWidth;
-      values.forEach((value, columnIndex) => {
-        const width = panelWidth * columnRatios[columnIndex];
-        doc.setFont("ProtocolSans", row?.stationPoint && columnIndex === 0 ? "bold" : "normal");
-        doc.setFontSize(7.4);
-        const text = fitPdfText(doc, value, width - 2);
-        if (columnIndex === 2) {
-          doc.text(text, x + width / 2, tableY + headerHeight + rowIndex * rowHeight + 3.55, { align: "center" });
-        } else {
-          doc.text(text, x + 1, tableY + headerHeight + rowIndex * rowHeight + 3.55);
-        }
-        x += width;
-      });
-    }
-  }
-}
-
-export function buildProtocolPdf(protocol: Protocol, logoDataUri: string | undefined, language: Language, fonts: PdfFonts) {
-  const t = (key: MessageKey, params?: MessageParams) => translate(language, key, params);
-  const pages = buildPrintPages(protocol, language);
-  const pageMetadata = buildPageMetadata(protocol, pages);
-  const doc = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4", compress: true });
-  if (doc.internal.pageSize.getWidth() <= doc.internal.pageSize.getHeight()) {
-    throw new Error("PDF landscape orientation could not be initialized");
-  }
-  registerPdfFonts(doc, fonts);
-  doc.setLanguage(language);
-  doc.setProperties({ title: t("appTitle"), subject: protocol.meta.project || t("appTitle") });
-  pages.forEach((page, pageIndex) => {
-    if (pageIndex > 0) doc.addPage("a4", "landscape");
-    drawPdfHeader(doc, { ...protocol, meta: pageMetadata[pageIndex].meta }, logoDataUri, language);
-    drawPdfTable(doc, page, language);
-    drawPdfFooter(doc, protocol, pageIndex, pages.length, language);
-  });
-  return doc;
+async function createProtocolPdf(protocol: Protocol, language: Language) {
+  const { buildProtocolPdf, loadAitLogoDataUri } = await loadProtocolPdf();
+  const [fonts, logoDataUri] = await Promise.all([loadPdfFonts(), protocol.meta.showCompanyLogo ? loadAitLogoDataUri() : undefined]);
+  return buildProtocolPdf(protocol, logoDataUri, language, fonts);
 }
 
 async function downloadProtocolPdf(protocol: Protocol, language: Language) {
   const pdfWindow = window.open("", "_blank");
-  const project = protocol.meta.project.trim().replace(/[<>:"/\\|?*\x00-\x1F]+/g, "_") || translate(language, "project");
-  const filename = `Standpunktprotokoll_${project}_${protocol.meta.date || localDate()}.pdf`;
-  let doc: jsPDF;
+  let doc: Awaited<ReturnType<typeof createProtocolPdf>>;
   try {
-    const [fonts, logoDataUri] = await Promise.all([loadPdfFonts(), protocol.meta.showCompanyLogo ? loadAitLogoDataUri() : undefined]);
-    doc = buildProtocolPdf(protocol, logoDataUri, language, fonts);
+    doc = await createProtocolPdf(protocol, language);
   } catch (error) {
     pdfWindow?.close();
     throw error;
@@ -834,15 +520,13 @@ async function downloadProtocolPdf(protocol: Protocol, language: Language) {
     pdfWindow.location.href = pdfUrl;
     window.setTimeout(() => URL.revokeObjectURL(pdfUrl), 60_000);
   } else {
-    doc.save(filename);
+    doc.save(pdfFilename(protocol, language));
   }
 }
 
 async function shareProtocolPdf(protocol: Protocol, language: Language) {
-  const project = protocol.meta.project.trim().replace(/[<>:"/\\|?*\x00-\x1F]+/g, "_") || translate(language, "project");
-  const filename = `Standpunktprotokoll_${project}_${protocol.meta.date || localDate()}.pdf`;
-  const logoDataUri = protocol.meta.showCompanyLogo ? await loadAitLogoDataUri() : undefined;
-  const doc = buildProtocolPdf(protocol, logoDataUri, language, await loadPdfFonts());
+  const filename = pdfFilename(protocol, language);
+  const doc = await createProtocolPdf(protocol, language);
   const file = new File([doc.output("blob")], filename, { type: "application/pdf" });
   const shareData: ShareData = { files: [file] };
   if (navigator.share && navigator.canShare?.(shareData)) {
@@ -860,10 +544,12 @@ function PrintMetaField({ label, value, className = "" }: { label: string; value
   return <div className={`print-meta-field ${className}`}><b>{label}</b><span>{value || " "}</span></div>;
 }
 
-function PrintProtocol({ protocol }: { protocol: Protocol }) {
+// Hidden until the browser prints; memoized so typing does not rebuild every sheet.
+const PrintProtocol = memo(function PrintProtocol({ protocol }: { protocol: Protocol }) {
   const { language, t } = useLanguage();
   const pages = buildPrintPages(protocol, language);
   const pageMetadata = buildPageMetadata(protocol, pages);
+  const legendEntries = protocolLegendEntries(protocol, language);
 
   return (
     <div className="print-root" aria-hidden="true">
@@ -913,12 +599,12 @@ function PrintProtocol({ protocol }: { protocol: Protocol }) {
               ))}
             </tbody>
           </table>
-          <footer className="print-footer"><span className="print-legend">{protocolLegendEntries(protocol, language).map((entry, index) => <span key={entry.abbreviation}>{index > 0 && " · "}<b>{entry.abbreviation}</b>{` - ${entry.description}`}</span>)}</span><span className="print-page-number">{t("pageNumber", {page: pageIndex + 1, total: pages.length})}</span></footer>
+          <footer className="print-footer"><span className="print-legend">{legendEntries.map((entry, index) => <span key={entry.abbreviation}>{index > 0 && " · "}<b>{entry.abbreviation}</b>{` - ${entry.description}`}</span>)}</span><span className="print-page-number">{t("pageNumber", {page: pageIndex + 1, total: pages.length})}</span></footer>
         </section>
       ))}
     </div>
   );
-}
+});
 
 export default function Home() {
   return <LanguageProvider><HomeContent /></LanguageProvider>;
@@ -949,12 +635,12 @@ function HomeContent() {
   const [pdfActionsOpen, setPdfActionsOpen] = useState(false);
   const lastStationRef = useRef<HTMLDivElement | null>(null);
   const importInputRef = useRef<HTMLInputElement | null>(null);
-  const snapshotTimerRef = useRef<number | null>(null);
   const lastSnapshotValueRef = useRef("");
 
   useEffect(() => {
     let active = true;
     void loadPdfFonts().catch(() => undefined);
+    void loadProtocolPdf().catch(() => undefined);
     let initialTheme: UiTheme = "dark";
     try {
       initialTheme = localStorage.getItem(UI_THEME_KEY) === "light" ? "light" : "dark";
@@ -1024,25 +710,33 @@ function HomeContent() {
 
   useEffect(() => {
     if (!hydrated) return;
-    const serialized = JSON.stringify(store);
-    try {
-      localStorage.setItem(STORAGE_KEY, serialized);
-    } catch {
-      // IndexedDB remains the primary store if Safari blocks this mirror.
-    }
-    void writeIndexedDbStore(store).catch(() => undefined);
-    if (!hasMeaningfulData(store)) return;
-    const snapshotValue = JSON.stringify({ ...store, lastBackupAt: undefined });
-    if (snapshotValue === lastSnapshotValueRef.current) return;
-    if (snapshotTimerRef.current) window.clearTimeout(snapshotTimerRef.current);
-    snapshotTimerRef.current = window.setTimeout(() => {
+    pendingStore = store;
+    const timer = window.setTimeout(flushPendingStore, PERSIST_DELAY_MS);
+    return () => window.clearTimeout(timer);
+  }, [hydrated, store]);
+
+  useEffect(() => {
+    // Save immediately when iOS suspends or closes the app instead of waiting for the delay.
+    const flushWhenHidden = () => { if (document.visibilityState === "hidden") flushPendingStore(); };
+    window.addEventListener("pagehide", flushPendingStore);
+    document.addEventListener("visibilitychange", flushWhenHidden);
+    return () => {
+      window.removeEventListener("pagehide", flushPendingStore);
+      document.removeEventListener("visibilitychange", flushWhenHidden);
+      flushPendingStore();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!hydrated || !hasMeaningfulData(store)) return;
+    const timer = window.setTimeout(() => {
+      const snapshotValue = JSON.stringify({ ...store, lastBackupAt: undefined });
+      if (snapshotValue === lastSnapshotValueRef.current) return;
       void saveSnapshot(store).then(() => {
         lastSnapshotValueRef.current = snapshotValue;
       }).catch(() => undefined);
     }, 1400);
-    return () => {
-      if (snapshotTimerRef.current) window.clearTimeout(snapshotTimerRef.current);
-    };
+    return () => window.clearTimeout(timer);
   }, [hydrated, store]);
 
   const activeProtocol = store.protocols.find((protocol) => protocol.id === store.activeProtocolId) ?? store.protocols[0];
@@ -1058,6 +752,8 @@ function HomeContent() {
   }, [store.savedCombinations, REMARK_CHOICES, t]);
   const recentCombinations = useMemo(() => [...store.savedCombinations]
     .sort((a, b) => b.lastUsedAt.localeCompare(a.lastUsedAt)).slice(0, 12), [store.savedCombinations]);
+  const pdfSheets = useMemo(() => pdfActionsOpen && activeProtocol ? buildPageMetadata(activeProtocol) : [], [pdfActionsOpen, activeProtocol]);
+  const printableProtocol = useDeferredValue(activeProtocol);
   const backupNeeded = useMemo(() => {
     if (!hasMeaningfulData(store)) return false;
     if (!store.lastBackupAt) return true;
@@ -1278,10 +974,6 @@ function HomeContent() {
   }
 
   function printProtocol() {
-    setStore((current) => ({ ...current, protocols: current.protocols.map((protocol) =>
-      protocol.id === current.activeProtocolId ? {
-        ...protocol, updatedAt: nowIso(),
-      } : protocol) }));
     void downloadProtocolPdf(activeProtocol, language).catch(() => window.alert(t("pdfError")));
   }
 
@@ -1464,9 +1156,9 @@ function HomeContent() {
       {pdfActionsOpen ? (
         <Modal title={t("pdfRecord")} onClose={() => setPdfActionsOpen(false)}>
           <div className="modal-scroll pdf-choice-list">
-            {buildPageMetadata(activeProtocol).length > 1 ? <section className="page-weather-review">
+            {pdfSheets.length > 1 ? <section className="page-weather-review">
               <h3>{t("pageWeather")}</h3><p>{t("pageWeatherHint")}</p>
-              {buildPageMetadata(activeProtocol).slice(1).map((sheet, index, following) => (
+              {pdfSheets.slice(1).map((sheet, index, following) => (
                 <fieldset className="page-weather-fields" key={sheet.key}>
                   <legend>{t("pageNumber", { page: index + 2, total: following.length + 1 })}{` · ${t("station")}: ${sheet.station?.point || "—"}`}</legend>
                   <LocalizedDateTimeField key={`sheet-time-${sheet.key}-${language}`} label={t("stationTime")} kind="time" value={sheet.meta.startTime} onChange={(value) => { if (sheet.station) updateStation(sheet.station.id, { startTime: value }); }} />
@@ -1668,7 +1360,7 @@ function HomeContent() {
         </Modal>
       ) : null}
 
-      <PrintProtocol protocol={activeProtocol} />
+      <PrintProtocol protocol={printableProtocol} />
     </>
   );
 }

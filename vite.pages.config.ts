@@ -1,7 +1,8 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 export default defineConfig({
-  root: "pages",
+  // Not "pages/": vinext would treat that directory as a Next.js Pages Router.
+  root: "github-pages",
   base: "/Standpunktprotokoll/",
   publicDir: "../public",
   plugins: [react()],

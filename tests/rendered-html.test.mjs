@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { LANGUAGES, MESSAGES, remarkChoices, pointTypeChoices, translate, formatDate, countLabel } from "../app/i18n.ts";
+import { LANGUAGES, remarkChoices } from "../app/i18n.ts";
 import { DEFAULT_LANGUAGE } from "../app/default-language.ts";
 
 const developmentPreviewMeta =

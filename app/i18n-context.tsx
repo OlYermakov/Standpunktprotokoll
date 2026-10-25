@@ -2,36 +2,53 @@
 
 import { assetUrl } from "./asset-url";
 
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { DEFAULT_LANGUAGE } from "./default-language";
 import { isLanguage, LANGUAGES, LANGUAGE_NAMES, LANGUAGE_STORAGE_KEY, translate, type Language, type MessageKey, type MessageParams } from "./i18n";
 
 type LanguageContextValue = { language: Language; setLanguage: (language: Language) => void; t: (key: MessageKey, params?: MessageParams) => string };
 const LanguageContext = createContext<LanguageContextValue>({language: DEFAULT_LANGUAGE, setLanguage:()=>{}, t:(key,params)=>translate(DEFAULT_LANGUAGE,key,params)});
 
+// This preference deliberately lives outside the protocol store and backups.
+let clientLanguage: Language | null = null;
+const languageListeners = new Set<() => void>();
+
+function readClientLanguage(): Language {
+  if (clientLanguage) return clientLanguage;
+  let language: Language = DEFAULT_LANGUAGE;
+  try {
+    const requested=new URL(window.location.href).searchParams.get("lang");
+    const stored=isLanguage(requested) ? requested : localStorage.getItem(LANGUAGE_STORAGE_KEY);
+    if(isLanguage(stored)) language=stored;
+    localStorage.setItem(LANGUAGE_STORAGE_KEY,language);
+  } catch { /* Language selection still works in this session. */ }
+  clientLanguage = language;
+  return language;
+}
+
+function chooseLanguage(language: Language) {
+  clientLanguage = language;
+  try { localStorage.setItem(LANGUAGE_STORAGE_KEY,language); } catch { /* Keep session language without storage. */ }
+  languageListeners.forEach(listener => listener());
+}
+
+function subscribeLanguage(listener: () => void) {
+  languageListeners.add(listener);
+  return () => { languageListeners.delete(listener); };
+}
+
 export function LanguageProvider({children}: {children: React.ReactNode}) {
-  const [language,setLanguage] = useState<Language>(DEFAULT_LANGUAGE);
-  const [ready,setReady] = useState(false);
+  // The server snapshot keeps hydration identical to the prerendered default language.
+  const language = useSyncExternalStore(subscribeLanguage, readClientLanguage, () => DEFAULT_LANGUAGE);
   useEffect(()=>{
-    // This preference deliberately lives outside the protocol store and backups.
-    try {
-      const requested=new URL(window.location.href).searchParams.get("lang");
-      const stored=isLanguage(requested) ? requested : localStorage.getItem(LANGUAGE_STORAGE_KEY);
-      if(isLanguage(stored)) setLanguage(stored);
-    } catch { /* Language selection still works in this session. */ }
-    setReady(true);
-  },[]);
-  useEffect(()=>{
-    if(!ready) return;
     document.documentElement.lang=language;
     document.title=translate(language,"appTitle");
     document.querySelectorAll('meta[name="description"]').forEach(el=>el.setAttribute("content",translate(language,"appDescription")));
     document.querySelectorAll('meta[name="apple-mobile-web-app-title"], meta[name="application-name"]').forEach(el=>el.setAttribute("content",translate(language,"appTitle")));
     document.querySelectorAll('link[rel="manifest"]').forEach(el=>el.setAttribute("href",assetUrl(`/manifest-${language}.webmanifest`)));
-    try { localStorage.setItem(LANGUAGE_STORAGE_KEY,language); } catch { /* Keep session language without storage. */ }
-  },[ready,language]);
+  },[language]);
   const t=useCallback((key:MessageKey,params?:MessageParams)=>translate(language,key,params),[language]);
-  const context=useMemo(()=>({language,setLanguage,t}),[language,t]);
+  const context=useMemo(()=>({language,setLanguage:chooseLanguage,t}),[language,t]);
   return <LanguageContext.Provider value={context}>{children}</LanguageContext.Provider>;
 }
 

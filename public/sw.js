@@ -1,4 +1,4 @@
-const CACHE_NAME = "standpunktprotokoll-multilingual-v35";
+const CACHE_NAME = "standpunktprotokoll-multilingual-v36";
 const APP_SHELL = [
   "/manifest-de.webmanifest", "/manifest-en.webmanifest", "/manifest-es.webmanifest", "/manifest-it.webmanifest", "/manifest-uk.webmanifest",
   "/fonts/DejaVuSans.ttf", "/fonts/DejaVuSans-Bold.ttf",
@@ -12,6 +12,10 @@ const NETWORK_FIRST_ASSETS = new Set([
   "/apple-touch-icon-v20.png", "/apple-touch-icon-167x167-v20.png", "/apple-touch-icon-152x152-v20.png",
   "/apple-touch-icon-120x120-v20.png", "/apple-touch-icon-precomposed-v20.png",
 ]);
+// Hashed bundles and fonts never change under the same URL: serve them from cache without refetching.
+const IMMUTABLE_PREFIXES = ["/assets/", "/fonts/"];
+// Ignore Vary: servers may vary on Origin, which module scripts send but cache.addAll does not.
+const MATCH_OPTIONS = { ignoreVary: true };
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(APP_SHELL)).then(() => self.skipWaiting()));
@@ -24,27 +28,6 @@ self.addEventListener("activate", (event) => {
 });
 
 self.addEventListener("message", (event) => {
-  if (event.data?.type === "STORE_PDF") {
-    const { url, bytes, filename } = event.data;
-    const reply = event.ports?.[0];
-    event.waitUntil((async () => {
-      try {
-        const pdfUrl = new URL(url, self.location.origin);
-        if (pdfUrl.origin !== self.location.origin || !pdfUrl.pathname.startsWith("/__pdf/")) throw new Error("Invalid PDF URL");
-        const safeFilename = String(filename || "Standpunktprotokoll.pdf").replace(/["\\\r\n]/g, "_");
-        const response = new Response(bytes, { headers: {
-          "Content-Type": "application/pdf",
-          "Content-Disposition": `attachment; filename="${safeFilename}"; filename*=UTF-8''${encodeURIComponent(safeFilename)}`,
-          "Cache-Control": "no-store",
-        } });
-        await caches.open(CACHE_NAME).then((cache) => cache.put(pdfUrl.href, response));
-        reply?.postMessage({ ok: true });
-      } catch {
-        reply?.postMessage({ ok: false });
-      }
-    })());
-    return;
-  }
   if (event.data?.type !== "CACHE_URLS" || !Array.isArray(event.data.urls)) return;
   const urls = event.data.urls.filter((url) => {
     try { return new URL(url).origin === self.location.origin; } catch { return false; }
@@ -62,25 +45,28 @@ self.addEventListener("fetch", (event) => {
   if (request.method !== "GET") return;
   const url = new URL(request.url);
   if (url.origin !== self.location.origin) return;
-  if (url.pathname.startsWith("/__pdf/")) {
-    event.respondWith(caches.match(request).then((cached) => cached || new Response("PDF not found", { status: 404 })));
+  if (IMMUTABLE_PREFIXES.some((prefix) => url.pathname.startsWith(prefix))) {
+    event.respondWith(caches.match(request, MATCH_OPTIONS).then((cached) => cached || fetch(request).then((response) => {
+      if (response.ok) caches.open(CACHE_NAME).then((cache) => cache.put(request, response.clone()));
+      return response;
+    })));
     return;
   }
   if (NETWORK_FIRST_ASSETS.has(url.pathname)) {
     event.respondWith(fetch(request).then((response) => {
       if (response.ok) caches.open(CACHE_NAME).then((cache) => cache.put(request, response.clone()));
       return response;
-    }).catch(() => caches.match(request).then((cached) => cached || Response.error())));
+    }).catch(() => caches.match(request, MATCH_OPTIONS).then((cached) => cached || Response.error())));
     return;
   }
   if (request.mode === "navigate") {
     event.respondWith(fetch(request).then((response) => {
       if (response.ok) caches.open(CACHE_NAME).then((cache) => cache.put("/", response.clone()));
       return response;
-    }).catch(() => caches.match("/").then((cached) => cached || Response.error())));
+    }).catch(() => caches.match("/", MATCH_OPTIONS).then((cached) => cached || Response.error())));
     return;
   }
-  event.respondWith(caches.match(request).then((cached) => {
+  event.respondWith(caches.match(request, MATCH_OPTIONS).then((cached) => {
     const network = fetch(request).then((response) => {
       if (response.ok) caches.open(CACHE_NAME).then((cache) => cache.put(request, response.clone()));
       return response;
