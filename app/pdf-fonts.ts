@@ -1,10 +1,12 @@
+import { assetUrl } from "./asset-url";
+
 import type { jsPDF } from "jspdf";
 
 export type PdfFonts = { regular: string; bold: string };
 let fontPromise: Promise<PdfFonts> | null = null;
 
 async function readFont(url: string): Promise<string> {
-  const response = await fetch(url);
+  const response = await fetch(assetUrl(url));
   if (!response.ok) throw new Error("PDF font could not be loaded");
   const bytes = new Uint8Array(await response.arrayBuffer());
   let binary = "";

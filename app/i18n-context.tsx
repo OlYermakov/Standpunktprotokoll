@@ -1,5 +1,7 @@
 "use client";
 
+import { assetUrl } from "./asset-url";
+
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { DEFAULT_LANGUAGE } from "./default-language";
 import { isLanguage, LANGUAGES, LANGUAGE_NAMES, LANGUAGE_STORAGE_KEY, translate, type Language, type MessageKey, type MessageParams } from "./i18n";
@@ -25,7 +27,7 @@ export function LanguageProvider({children}: {children: React.ReactNode}) {
     document.title=translate(language,"appTitle");
     document.querySelectorAll('meta[name="description"]').forEach(el=>el.setAttribute("content",translate(language,"appDescription")));
     document.querySelectorAll('meta[name="apple-mobile-web-app-title"], meta[name="application-name"]').forEach(el=>el.setAttribute("content",translate(language,"appTitle")));
-    document.querySelectorAll('link[rel="manifest"]').forEach(el=>el.setAttribute("href",`/manifest-${language}.webmanifest`));
+    document.querySelectorAll('link[rel="manifest"]').forEach(el=>el.setAttribute("href",assetUrl(`/manifest-${language}.webmanifest`)));
     try { localStorage.setItem(LANGUAGE_STORAGE_KEY,language); } catch { /* Keep session language without storage. */ }
   },[ready,language]);
   const t=useCallback((key:MessageKey,params?:MessageParams)=>translate(language,key,params),[language]);

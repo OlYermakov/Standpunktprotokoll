@@ -1,5 +1,7 @@
 "use client";
 
+import { assetUrl } from "./asset-url";
+
 import { useEffect, useMemo, useRef, useState } from "react";
 import { jsPDF } from "jspdf";
 import { DEFAULT_LANGUAGE } from "./default-language";
@@ -82,7 +84,7 @@ const STATE_STORE = "state";
 const SNAPSHOT_STORE = "snapshots";
 const STORE_RECORD_KEY = "current-store";
 const MAX_SNAPSHOTS = 12;
-const AIT_LOGO_URL = "/ait-logo.png";
+const AIT_LOGO_URL = assetUrl("/ait-logo.png");
 let aitLogoDataUriPromise: Promise<string> | null = null;
 
 function loadAitLogoDataUri() {
@@ -994,7 +996,7 @@ function HomeContent() {
     window.addEventListener("online", updateOnline);
     window.addEventListener("offline", updateOnline);
     if ("serviceWorker" in navigator) {
-      navigator.serviceWorker.register("/sw.js").then(async () => {
+      navigator.serviceWorker.register(assetUrl("/sw.js")).then(async () => {
         const registration = await navigator.serviceWorker.ready;
         setOfflineReady(true);
         const urls = performance.getEntriesByType("resource").map((entry) => entry.name)

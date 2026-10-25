@@ -13,7 +13,10 @@
     "test": "npm run build && node --test tests/*.test.mjs",
     "validate:artifact": "bash scripts/validate-artifact.sh",
     "lint": "bash scripts/sites-env.sh -- eslint . --ignore-pattern dist --ignore-pattern .next",
-    "db:generate": "bash scripts/sites-env.sh -- drizzle-kit generate"
+    "db:generate": "bash scripts/sites-env.sh -- drizzle-kit generate",
+    "build:pages": "vite build --config vite.pages.config.ts && node scripts/prepare-pages.mjs",
+    "preview:pages": "vite preview --config vite.pages.config.ts",
+    "test:pages": "node --test tests/localization.test.mjs tests/pdf-localization.test.mjs tests/pages.test.mjs"
   },
   "dependencies": {
     "drizzle-orm": "0.45.2",
