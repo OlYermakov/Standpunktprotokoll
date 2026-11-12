@@ -8,7 +8,7 @@ import { InstructionGuide } from "./instructions";
 import { protocolPointSuggestions, lastInstrumentHeightSuggestions } from "./protocol-points";
 import { abbreviation, prismAbbreviation, formatDate, formatBackupDate, countLabel, translate, LOCALES, remarkChoices, pointTypeChoices, type Language, type MessageKey, type MessageParams } from "./i18n";
 import { loadPdfFonts } from "./pdf-fonts";
-import { buildPageMetadata, buildPrintPages, PRINT_ROWS_PER_PANEL, protocolLegendEntries, targetRemark, type Protocol, type ProtocolMeta, type Station, type Target } from "./protocol-print";
+import { buildPageMetadata, buildPrintPages, PRINT_ROWS_PER_PANEL, protocolLegendEntries, targetRemark, HIDEABLE_FIELDS, type HideableField, type CompanyLogo, type CustomPointType, type Protocol, type ProtocolMeta, type Station, type Target } from "./protocol-print";
 
 const loadProtocolPdf = () => import("./protocol-pdf");
 
@@ -18,6 +18,8 @@ type SavedCombination = {
 };
 type Store = {
   version: 1; activeProtocolId: string; protocols: Protocol[]; savedCombinations: SavedCombination[]; lastBackupAt?: string;
+  customPointTypes?: CustomPointType[]; companyLogo?: CompanyLogo;
+  hiddenPointTypes?: string[]; hiddenFields?: HideableField[];
 };
 type StoreSnapshot = { id: string; createdAt: string; store: Store };
 type BackupFile = { format: "standpunktprotokoll-backup"; version: 1; createdAt: string; store: Store };
@@ -31,8 +33,68 @@ type TargetForm = {
 };
 type Choice = { value: string; label: string; detail?: string };
 type UiTheme = "dark" | "light";
+type ThemeChoice = UiTheme | "auto";
 
 const CUSTOM_REMARK = "__custom__";
+const CUSTOM_POINT_TYPE = "__custom_point_type__";
+const LOGO_MAX_PX = 900;
+const APP_VERSION = "1.2.0";
+const FIELD_LABELS: Record<HideableField, MessageKey> = {
+  projectNumber: "projectNumber", startTime: "start", instrument: "instrument", crew: "crew",
+  temperature: "temperature", pressure: "pressure", fpSynced: "fpStatus", fpFile: "fpFile",
+};
+
+function normalizeCustomPointTypes(value: unknown): CustomPointType[] {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set<string>();
+  return value.flatMap((item) => {
+    const code = typeof item?.code === "string" ? item.code.trim() : "";
+    if (!code || seen.has(code)) return [];
+    seen.add(code);
+    return [{ code, detail: typeof item.detail === "string" ? item.detail.trim() : "" }];
+  });
+}
+
+function normalizeCompanyLogo(value: unknown): CompanyLogo | undefined {
+  const logo = value as Partial<CompanyLogo> | undefined;
+  if (!logo || typeof logo.dataUri !== "string" || !logo.dataUri.startsWith("data:image/png")) return undefined;
+  const width = Number(logo.width), height = Number(logo.height);
+  if (!(width > 0 && height > 0)) return undefined;
+  return { dataUri: logo.dataUri, width, height, caption: typeof logo.caption === "string" ? logo.caption : "" };
+}
+
+/** Adds a point type, or updates its description; an empty description never wipes an existing one. */
+function upsertCustomPointType(items: CustomPointType[], next: CustomPointType): CustomPointType[] {
+  const existing = items.find((item) => item.code === next.code);
+  if (!existing) return [...items, next];
+  if (!next.detail) return items;
+  return items.map((item) => item.code === next.code ? next : item);
+}
+
+/** Reads any image the browser can decode and re-encodes it as a PNG of at most LOGO_MAX_PX. */
+async function readLogoFile(file: File): Promise<CompanyLogo> {
+  const url = URL.createObjectURL(file);
+  try {
+    const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const element = new Image();
+      element.onload = () => resolve(element);
+      element.onerror = () => reject(new Error("logo"));
+      element.src = url;
+    });
+    const scale = Math.min(1, LOGO_MAX_PX / Math.max(image.naturalWidth, image.naturalHeight));
+    const width = Math.max(1, Math.round(image.naturalWidth * scale));
+    const height = Math.max(1, Math.round(image.naturalHeight * scale));
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext("2d");
+    if (!context) throw new Error("logo");
+    context.drawImage(image, 0, 0, width, height);
+    return { dataUri: canvas.toDataURL("image/png"), width, height, caption: "" };
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
 
 const DEFAULT_TARGET_FORM: TargetForm = {
   point: "", height: "", remark: "", pointType: "", isBacksight: false, isConnectionPoint: false,
@@ -187,6 +249,10 @@ function normalizeStore(value: unknown): Store | null {
     protocols,
     savedCombinations: normalizeSavedCombinations(parsed.savedCombinations ?? []),
     lastBackupAt: typeof parsed.lastBackupAt === "string" ? parsed.lastBackupAt : undefined,
+    customPointTypes: normalizeCustomPointTypes(parsed.customPointTypes),
+    companyLogo: normalizeCompanyLogo(parsed.companyLogo),
+    hiddenPointTypes: Array.isArray(parsed.hiddenPointTypes) ? parsed.hiddenPointTypes.filter((code): code is string => typeof code === "string") : [],
+    hiddenFields: Array.isArray(parsed.hiddenFields) ? parsed.hiddenFields.filter((key): key is HideableField => (HIDEABLE_FIELDS as readonly string[]).includes(key)) : [],
   };
 }
 
@@ -502,7 +568,7 @@ function pdfFilename(protocol: Protocol, language: Language) {
 
 async function createProtocolPdf(protocol: Protocol, language: Language) {
   const { buildProtocolPdf, loadAitLogoDataUri } = await loadProtocolPdf();
-  const [fonts, logoDataUri] = await Promise.all([loadPdfFonts(), protocol.meta.showCompanyLogo ? loadAitLogoDataUri() : undefined]);
+  const [fonts, logoDataUri] = await Promise.all([loadPdfFonts(), protocol.meta.showCompanyLogo && !protocol.companyLogo ? loadAitLogoDataUri() : undefined]);
   return buildProtocolPdf(protocol, logoDataUri, language, fonts);
 }
 
@@ -550,6 +616,7 @@ const PrintProtocol = memo(function PrintProtocol({ protocol }: { protocol: Prot
   const pages = buildPrintPages(protocol, language);
   const pageMetadata = buildPageMetadata(protocol, pages);
   const legendEntries = protocolLegendEntries(protocol, language);
+  const hiddenPrint = new Set(protocol.hiddenFields ?? []);
 
   return (
     <div className="print-root" aria-hidden="true">
@@ -559,15 +626,21 @@ const PrintProtocol = memo(function PrintProtocol({ protocol }: { protocol: Prot
             <h1>{t("appTitle")}</h1>
             <PrintMetaField className="print-project" label={t("project") + ":"} value={protocol.meta.project} />
             <PrintMetaField className="print-date" label={t("date") + ":"} value={formatDate(protocol.meta.date, language)} />
-            <PrintMetaField className="print-instrument" label={t("instrument") + ":"} value={protocol.meta.instrument} />
-            <PrintMetaField className="print-fp-status" label={t("fpStatus") + ":"} value={protocol.meta.fpSynced} />
-            <PrintMetaField className="print-project-number" label={t("projectNumber") + ":"} value={protocol.meta.projectNumber} />
-            <PrintMetaField className="print-time" label={t("time") + ":"} value={pageMetadata[pageIndex].meta.startTime} />
-            <PrintMetaField className="print-crew" label={t("crew")} value={protocol.meta.crew} />
-            <PrintMetaField className="print-fp-file" label={t("fpFile") + ":"} value={protocol.meta.fpFile} />
-            <PrintMetaField className="print-temperature" label={t("temperature") + ":"} value={pageMetadata[pageIndex].meta.temperature ? `${pageMetadata[pageIndex].meta.temperature} °C` : ""} />
-            <PrintMetaField className="print-pressure" label={t("pressure") + ":"} value={pageMetadata[pageIndex].meta.pressure ? `${pageMetadata[pageIndex].meta.pressure} hPa` : ""} />
-            {protocol.meta.showCompanyLogo ? (
+            {!hiddenPrint.has("instrument") ? <PrintMetaField className="print-instrument" label={t("instrument") + ":"} value={protocol.meta.instrument} /> : null}
+            {!hiddenPrint.has("fpSynced") ? <PrintMetaField className="print-fp-status" label={t("fpStatus") + ":"} value={protocol.meta.fpSynced} /> : null}
+            {!hiddenPrint.has("projectNumber") ? <PrintMetaField className="print-project-number" label={t("projectNumber") + ":"} value={protocol.meta.projectNumber} /> : null}
+            {!hiddenPrint.has("startTime") ? <PrintMetaField className="print-time" label={t("time") + ":"} value={pageMetadata[pageIndex].meta.startTime} /> : null}
+            {!hiddenPrint.has("crew") ? <PrintMetaField className="print-crew" label={t("crew")} value={protocol.meta.crew} /> : null}
+            {!hiddenPrint.has("fpFile") ? <PrintMetaField className="print-fp-file" label={t("fpFile") + ":"} value={protocol.meta.fpFile} /> : null}
+            {!hiddenPrint.has("temperature") ? <PrintMetaField className="print-temperature" label={t("temperature") + ":"} value={pageMetadata[pageIndex].meta.temperature ? `${pageMetadata[pageIndex].meta.temperature} °C` : ""} /> : null}
+            {!hiddenPrint.has("pressure") ? <PrintMetaField className="print-pressure" label={t("pressure") + ":"} value={pageMetadata[pageIndex].meta.pressure ? `${pageMetadata[pageIndex].meta.pressure} hPa` : ""} /> : null}
+            {protocol.meta.showCompanyLogo && protocol.companyLogo ? (
+              <div className="print-brand print-brand-custom">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img className="print-logo-custom" src={protocol.companyLogo.dataUri} alt="" />
+                {protocol.companyLogo.caption.trim() ? <span>{protocol.companyLogo.caption}</span> : null}
+              </div>
+            ) : protocol.meta.showCompanyLogo ? (
               <div className="print-brand" aria-label={`A.I.T. GmbH - ${t("companyCaption")}`}>
                 <div className="print-logo" aria-hidden="true" />
                 <span>{t("companyCaption")}</span>
@@ -616,16 +689,20 @@ function HomeContent() {
   const POINT_TYPE_CHOICES = useMemo(() => pointTypeChoices(language), [language]);
   const [store, setStore] = useState<Store>(() => createInitialStore());
   const [hydrated, setHydrated] = useState(false);
-  const [online, setOnline] = useState(true);
-  const [uiTheme, setUiTheme] = useState<UiTheme>("dark");
-  const [offlineReady, setOfflineReady] = useState(false);
+  const [themeChoice, setThemeChoice] = useState<ThemeChoice>("auto");
+  const [systemDark, setSystemDark] = useState(true);
+  const uiTheme: UiTheme = themeChoice === "auto" ? (systemDark ? "dark" : "light") : themeChoice;
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [targetSheet, setTargetSheet] = useState<TargetSheet | null>(null);
   const [targetForm, setTargetForm] = useState<TargetForm>(DEFAULT_TARGET_FORM);
   const [customRemarkMode, setCustomRemarkMode] = useState(false);
+  const [customPointTypeMode, setCustomPointTypeMode] = useState(false);
+  const [customPointTypeDetail, setCustomPointTypeDetail] = useState("");
+  const [logoError, setLogoError] = useState(false);
+  const logoInputRef = useRef<HTMLInputElement>(null);
   const [protocolsOpen, setProtocolsOpen] = useState(false);
   const [valuesOpen, setValuesOpen] = useState(false);
-  const [installHint, setInstallHint] = useState(false);
-  const [aboutOpen, setAboutOpen] = useState(false);
   const [instructionOpen, setInstructionOpen] = useState(false);
   const [backupOpen, setBackupOpen] = useState(false);
   const [snapshots, setSnapshots] = useState<StoreSnapshot[]>([]);
@@ -641,16 +718,23 @@ function HomeContent() {
     let active = true;
     void loadPdfFonts().catch(() => undefined);
     void loadProtocolPdf().catch(() => undefined);
-    let initialTheme: UiTheme = "dark";
+    let initialChoice: ThemeChoice = "auto";
     try {
-      initialTheme = localStorage.getItem(UI_THEME_KEY) === "light" ? "light" : "dark";
+      const stored = localStorage.getItem(UI_THEME_KEY);
+      if (stored === "light" || stored === "dark") initialChoice = stored;
     } catch {
-      // The default dark theme remains available if storage is restricted.
+      // "Auto" (follow the phone) remains available if storage is restricted.
     }
+    const darkQuery = window.matchMedia("(prefers-color-scheme: dark)");
+    const initialTheme: UiTheme = initialChoice === "auto" ? (darkQuery.matches ? "dark" : "light") : initialChoice;
     document.documentElement.dataset.theme = initialTheme;
     const themeFrame = window.requestAnimationFrame(() => {
-      if (active) setUiTheme(initialTheme);
+      if (!active) return;
+      setThemeChoice(initialChoice);
+      setSystemDark(darkQuery.matches);
     });
+    const followSystemTheme = (event: MediaQueryListEvent) => setSystemDark(event.matches);
+    darkQuery.addEventListener("change", followSystemTheme);
     const installUrl = new URL(window.location.href);
     if (installUrl.searchParams.get("install") !== "v22") {
       installUrl.searchParams.set("install", "v22");
@@ -674,39 +758,35 @@ function HomeContent() {
       }
       if (!active) return;
       if (restored) setStore(restored);
-      setOnline(navigator.onLine);
       setHydrated(true);
       void navigator.storage?.persist?.().catch(() => false);
     })();
-    const updateOnline = () => setOnline(navigator.onLine);
-    window.addEventListener("online", updateOnline);
-    window.addEventListener("offline", updateOnline);
     if ("serviceWorker" in navigator) {
       navigator.serviceWorker.register(assetUrl("/sw.js")).then(async () => {
         const registration = await navigator.serviceWorker.ready;
-        setOfflineReady(true);
         const urls = performance.getEntriesByType("resource").map((entry) => entry.name)
           .filter((url) => url.startsWith(location.origin));
         registration.active?.postMessage({ type: "CACHE_URLS", urls });
-      }).catch(() => setOfflineReady(false));
+      }).catch(() => undefined);
     }
     return () => {
       active = false;
       window.cancelAnimationFrame(themeFrame);
-      window.removeEventListener("online", updateOnline);
-      window.removeEventListener("offline", updateOnline);
+      darkQuery.removeEventListener("change", followSystemTheme);
     };
   }, []);
 
   useEffect(() => {
     if (!hydrated) return;
     document.documentElement.dataset.theme = uiTheme;
+    document.querySelector('meta[name="theme-color"]')?.setAttribute("content", uiTheme === "dark" ? "#0b100e" : "#f4f7f5");
     try {
-      localStorage.setItem(UI_THEME_KEY, uiTheme);
+      if (themeChoice === "auto") localStorage.removeItem(UI_THEME_KEY);
+      else localStorage.setItem(UI_THEME_KEY, themeChoice);
     } catch {
       // Theme switching still works for the current session.
     }
-  }, [hydrated, uiTheme]);
+  }, [hydrated, uiTheme, themeChoice]);
 
   useEffect(() => {
     if (!hydrated) return;
@@ -750,10 +830,29 @@ function HomeContent() {
       .map((value) => ({ value, label: value, detail: t("previous") }));
     return [...REMARK_CHOICES, ...previous, { value: CUSTOM_REMARK, label: t("other"), detail: t("enterRemark") }];
   }, [store.savedCombinations, REMARK_CHOICES, t]);
+  const customPointTypes = useMemo(() => store.customPointTypes ?? [], [store.customPointTypes]);
+  const hiddenPointTypes = useMemo(() => new Set(store.hiddenPointTypes ?? []), [store.hiddenPointTypes]);
+  const hiddenFields = useMemo(() => new Set<string>(store.hiddenFields ?? []), [store.hiddenFields]);
+  const showField = (key: HideableField) => !hiddenFields.has(key);
+  const savedPointTypeOptions = useMemo<Choice[]>(() => {
+    const standard = new Set<string>(POINT_TYPE_CHOICES.map((option) => option.value));
+    return [...POINT_TYPE_CHOICES.filter((option) => !hiddenPointTypes.has(option.value)), ...customPointTypes.filter((item) => !standard.has(item.code))
+      .map((item) => ({ value: item.code, label: item.code, detail: item.detail || t("customPointType") }))];
+  }, [POINT_TYPE_CHOICES, hiddenPointTypes, customPointTypes, t]);
+  /** Standard (even if hidden) or own type: anything else is entered as a new own type. */
+  const knownPointType = (code: string) => POINT_TYPE_CHOICES.some((option) => option.value === code) || customPointTypes.some((item) => item.code === code);
+  /** Keeps a hidden standard type visible in a picker when it is the current value. */
+  const withCurrentType = (options: Choice[], value: string) => !value || options.some((option) => option.value === value)
+    ? options : [...POINT_TYPE_CHOICES.filter((option) => option.value === value), ...options];
+  const pointTypeOptions = useMemo<Choice[]>(() => [...savedPointTypeOptions,
+    { value: CUSTOM_POINT_TYPE, label: t("customPointType"), detail: t("enterPointType") }], [savedPointTypeOptions, t]);
   const recentCombinations = useMemo(() => [...store.savedCombinations]
     .sort((a, b) => b.lastUsedAt.localeCompare(a.lastUsedAt)).slice(0, 12), [store.savedCombinations]);
   const pdfSheets = useMemo(() => pdfActionsOpen && activeProtocol ? buildPageMetadata(activeProtocol) : [], [pdfActionsOpen, activeProtocol]);
-  const printableProtocol = useDeferredValue(activeProtocol);
+  // App-wide settings (own logo, own point types) travel with the protocol into print and PDF.
+  const brandedProtocol = useMemo<Protocol>(() => ({ ...activeProtocol, customPointTypes, companyLogo: store.companyLogo, hiddenFields: store.hiddenFields ?? [] }),
+    [activeProtocol, customPointTypes, store.companyLogo, store.hiddenFields]);
+  const printableProtocol = useDeferredValue(brandedProtocol);
   const backupNeeded = useMemo(() => {
     if (!hasMeaningfulData(store)) return false;
     if (!store.lastBackupAt) return true;
@@ -856,6 +955,8 @@ function HomeContent() {
     if (!stationId) return;
     const last = recentCombinations[0];
     setCustomRemarkMode(false);
+    setCustomPointTypeMode(false);
+    setCustomPointTypeDetail("");
     setTargetForm({
       ...DEFAULT_TARGET_FORM,
       height: last?.height ?? "",
@@ -865,6 +966,8 @@ function HomeContent() {
 
   function openEditTarget(stationId: string, target: Target) {
     setCustomRemarkMode(Boolean(target.remark && !remarkOptions.some((option) => option.value === target.remark)));
+    setCustomPointTypeMode(Boolean(target.pointType && !knownPointType(target.pointType)));
+    setCustomPointTypeDetail("");
     setTargetForm({
       point: target.point, height: target.height, remark: target.remark, pointType: target.pointType,
       isBacksight: target.isBacksight, isConnectionPoint: target.isConnectionPoint,
@@ -885,6 +988,35 @@ function HomeContent() {
       isConnectionPoint: match?.isConnectionPoint ?? form.isConnectionPoint,
     }));
     if (match?.remark) setCustomRemarkMode(!remarkOptions.some((option) => option.value === match.remark));
+    if (match?.pointType) setCustomPointTypeMode(!knownPointType(match.pointType));
+  }
+
+  function selectPointType(pointType: string) {
+    if (pointType === CUSTOM_POINT_TYPE) {
+      setCustomPointTypeMode(true);
+      setCustomPointTypeDetail("");
+      setTargetForm((form) => ({ ...form, pointType: "" }));
+      return;
+    }
+    setCustomPointTypeMode(false);
+    setTargetForm((form) => ({ ...form, pointType }));
+  }
+
+  function removeCustomPointType(code: string) {
+    setStore((current) => ({ ...current, customPointTypes: (current.customPointTypes ?? []).filter((item) => item.code !== code) }));
+  }
+
+  async function chooseLogo(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    try {
+      const logo = await readLogoFile(file);
+      setLogoError(false);
+      setStore((current) => ({ ...current, companyLogo: { ...logo, caption: current.companyLogo?.caption ?? "" } }));
+    } catch {
+      setLogoError(true);
+    }
   }
 
   function selectRemark(remark: string) {
@@ -905,11 +1037,15 @@ function HomeContent() {
     const normalizedRemark = normalizeTargetRemark(targetForm.remark, targetForm.isBacksight, targetForm.isConnectionPoint);
     const cleaned: TargetForm = {
       ...targetForm, point: targetForm.point.trim(), height: normalizeHeight(targetForm.height),
+      pointType: targetForm.pointType.trim(),
       ...normalizedRemark,
     };
     const targetId = targetSheet.targetId;
+    const newPointType = customPointTypeMode && cleaned.pointType && !POINT_TYPE_CHOICES.some((option) => option.value === cleaned.pointType)
+      ? { code: cleaned.pointType, detail: customPointTypeDetail.trim() } : null;
     setStore((current) => ({
       ...current,
+      customPointTypes: newPointType ? upsertCustomPointType(current.customPointTypes ?? [], newPointType) : current.customPointTypes,
       savedCombinations: rememberCombination(current.savedCombinations, cleaned),
       protocols: current.protocols.map((protocol) => protocol.id === current.activeProtocolId ? {
         ...protocol, updatedAt: nowIso(),
@@ -974,11 +1110,11 @@ function HomeContent() {
   }
 
   function printProtocol() {
-    void downloadProtocolPdf(activeProtocol, language).catch(() => window.alert(t("pdfError")));
+    void downloadProtocolPdf(brandedProtocol, language).catch(() => window.alert(t("pdfError")));
   }
 
   function shareProtocol() {
-    void shareProtocolPdf(activeProtocol, language).catch(() => window.alert(t("pdfError")));
+    void shareProtocolPdf(brandedProtocol, language).catch(() => window.alert(t("pdfError")));
   }
 
   function saveEditedValue() {
@@ -1002,50 +1138,18 @@ function HomeContent() {
       <main className="app-shell">
         <header className="topbar">
           <div className="brand-row">
-            <button type="button" className="brand-button" onClick={() => setAboutOpen(true)} aria-label={t("aboutAria")}>
-              <span className="brand-mark" aria-hidden="true" />
-            </button>
+            <span className="brand-mark" aria-hidden="true" />
             <div><p className="eyebrow">{t("fieldLog")}</p><h1>{t("appTitle")}</h1></div>
           </div>
-          <div className="status-row">
+          <div className="topbar-actions">
             <LanguageSwitcher />
-            <span className={`status-dot ${online ? "online" : "offline"}`} />
-            <span className="connection-status">{online ? (offlineReady ? t("offlineReady") : t("offlinePreparing")) : t("offline")}</span>
-            <button type="button" className="theme-toggle"
-              aria-label={uiTheme === "dark" ? t("enableLight") : t("enableDark")}
-              title={uiTheme === "dark" ? t("light") : t("dark")}
-              onClick={() => setUiTheme((theme) => theme === "dark" ? "light" : "dark")}>
-              {uiTheme === "dark" ? (
-                <svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.5" /><path d="M12 2v2M12 20v2M4.93 4.93l1.42 1.42M17.65 17.65l1.42 1.42M2 12h2M20 12h2M4.93 19.07l1.42-1.42M17.65 6.35l1.42-1.42" /></svg>
-              ) : (
-                <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M20 15.4A8.5 8.5 0 0 1 8.6 4a8.5 8.5 0 1 0 11.4 11.4Z" /></svg>
-              )}
-            </button>
-          </div>
-          <div className="header-actions">
-            <button type="button" className="quiet-button" onClick={() => setValuesOpen(true)}>{t("values")}</button>
-            <button type="button" className="quiet-button" onClick={() => setProtocolsOpen(true)}>
-              {t("protocols")} <span className="count-badge">{store.protocols.length}</span>
-            </button>
-            <button type="button" className="primary-small" onClick={startNewProtocol}>{t("new")}</button>
-          </div>
+            <button type="button" className="menu-button" onClick={() => setMenuOpen(true)}
+            aria-label={backupNeeded ? `${t("menu")}: ${t("backupNeededBadge")}` : t("menu")} aria-haspopup="dialog">
+            <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h10" /></svg>
+            {backupNeeded ? <span className="menu-dot" /> : null}
+          </button>
+        </div>
         </header>
-
-        {!offlineReady && online ? (
-          <button type="button" className="install-card" onClick={() => setInstallHint(true)}>
-            <span className="install-icon">↓</span>
-            <span><b>{t("offlineSetup")}</b><small>{t("homeScreen")}</small></span>
-            <span>›</span>
-          </button>
-        ) : null}
-
-        {backupNeeded ? (
-          <button type="button" className="backup-reminder" onClick={openBackupCenter}>
-            <span className="backup-reminder-icon">↥</span>
-            <span><b>{t("backupReminder")}</b><small>{t("backupReminderDetail")}</small></span>
-            <span>›</span>
-          </button>
-        ) : null}
 
         <section className="protocol-hero">
           <div><p className="eyebrow">{t("currentProtocol")}</p><h2>{protocolLabel(activeProtocol, language)}</h2>
@@ -1060,19 +1164,41 @@ function HomeContent() {
           </summary>
           <div className="form-grid">
             <Field label={t("project")} value={activeProtocol.meta.project} onChange={(value) => updateMeta("project", value)} placeholder={t("exampleProject")} />
-            <Field label={t("projectNumber")} value={activeProtocol.meta.projectNumber} onChange={(value) => updateMeta("projectNumber", value)} placeholder={t("exampleNumber")} />
+            {showField("projectNumber") ? <Field label={t("projectNumber")} value={activeProtocol.meta.projectNumber} onChange={(value) => updateMeta("projectNumber", value)} placeholder={t("exampleNumber")} /> : null}
             <LocalizedDateTimeField key={`date-${activeProtocol.id}-${language}`} label={t("date")} kind="date" value={activeProtocol.meta.date} onChange={(value) => updateMeta("date", value)} />
-            <LocalizedDateTimeField key={`time-${activeProtocol.id}-${language}`} label={t("start")} kind="time" value={activeProtocol.meta.startTime} onChange={(value) => updateMeta("startTime", value)} />
-            <Field label={t("instrument")} value={activeProtocol.meta.instrument} onChange={(value) => updateMeta("instrument", value)} placeholder={t("exampleInstrument")} />
-            <Field label={t("crew")} value={activeProtocol.meta.crew} onChange={(value) => updateMeta("crew", value)} placeholder={t("namesPlaceholder")} />
-            <Field label={t("temperature") + " [°C]"} inputMode="decimal" value={activeProtocol.meta.temperature} onChange={(value) => updateMeta("temperature", value)} />
-            <Field label={t("pressure") + " [hPa]"} inputMode="decimal" value={activeProtocol.meta.pressure} onChange={(value) => updateMeta("pressure", value)} />
-            <Field label={t("fpStatus")} value={activeProtocol.meta.fpSynced} onChange={(value) => updateMeta("fpSynced", value)} placeholder={t("statusPlaceholder")} />
-            <Field label={t("fpFile")} value={activeProtocol.meta.fpFile} onChange={(value) => updateMeta("fpFile", value)} placeholder={t("filePlaceholder")} />
+            {showField("startTime") ? <LocalizedDateTimeField key={`time-${activeProtocol.id}-${language}`} label={t("start")} kind="time" value={activeProtocol.meta.startTime} onChange={(value) => updateMeta("startTime", value)} /> : null}
+            {showField("instrument") ? <Field label={t("instrument")} value={activeProtocol.meta.instrument} onChange={(value) => updateMeta("instrument", value)} placeholder={t("exampleInstrument")} /> : null}
+            {showField("crew") ? <Field label={t("crew")} value={activeProtocol.meta.crew} onChange={(value) => updateMeta("crew", value)} placeholder={t("namesPlaceholder")} /> : null}
+            {showField("temperature") ? <Field label={t("temperature") + " [°C]"} inputMode="decimal" value={activeProtocol.meta.temperature} onChange={(value) => updateMeta("temperature", value)} /> : null}
+            {showField("pressure") ? <Field label={t("pressure") + " [hPa]"} inputMode="decimal" value={activeProtocol.meta.pressure} onChange={(value) => updateMeta("pressure", value)} /> : null}
+            {showField("fpSynced") ? <Field label={t("fpStatus")} value={activeProtocol.meta.fpSynced} onChange={(value) => updateMeta("fpSynced", value)} placeholder={t("statusPlaceholder")} /> : null}
+            {showField("fpFile") ? <Field label={t("fpFile")} value={activeProtocol.meta.fpFile} onChange={(value) => updateMeta("fpFile", value)} placeholder={t("filePlaceholder")} /> : null}
             <label className="check-field pdf-logo-field">
               <input type="checkbox" checked={activeProtocol.meta.showCompanyLogo} onChange={(event) => updateMeta("showCompanyLogo", event.target.checked)} />
               <span><b>{t("showLogo")}</b><small>{t("logoDetail")}</small></span>
             </label>
+            {activeProtocol.meta.showCompanyLogo ? (
+              <div className="company-logo-settings">
+                <div className="company-logo-preview">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={store.companyLogo?.dataUri ?? assetUrl("/ait-logo.png")} alt={t("companyLogo")} />
+                </div>
+                <div className="company-logo-copy">
+                  <b>{t("companyLogo")}</b>
+                  <small>{t("companyLogoDetail")}</small>
+                  <div className="company-logo-actions">
+                    <button type="button" className="secondary-button" onClick={() => logoInputRef.current?.click()}>{store.companyLogo ? t("replaceLogo") : t("uploadLogo")}</button>
+                    {store.companyLogo ? <button type="button" className="quiet-button" onClick={() => setStore((current) => ({ ...current, companyLogo: undefined }))}>{t("resetLogo")}</button> : null}
+                  </div>
+                  {logoError ? <small className="company-logo-error" role="alert">{t("logoError")}</small> : null}
+                </div>
+                {store.companyLogo ? (
+                  <Field label={t("logoCaption")} value={store.companyLogo.caption} placeholder={t("logoCaptionPlaceholder")}
+                    onChange={(caption) => setStore((current) => current.companyLogo ? { ...current, companyLogo: { ...current.companyLogo, caption } } : current)} />
+                ) : null}
+                <input ref={logoInputRef} className="visually-hidden" type="file" accept="image/png,image/jpeg,image/webp,image/heic,image/*" onChange={(event) => void chooseLogo(event)} />
+              </div>
+            ) : null}
           </div>
         </Disclosure>
 
@@ -1162,8 +1288,8 @@ function HomeContent() {
                 <fieldset className="page-weather-fields" key={sheet.key}>
                   <legend>{t("pageNumber", { page: index + 2, total: following.length + 1 })}{` · ${t("station")}: ${sheet.station?.point || "—"}`}</legend>
                   <LocalizedDateTimeField key={`sheet-time-${sheet.key}-${language}`} label={t("stationTime")} kind="time" value={sheet.meta.startTime} onChange={(value) => { if (sheet.station) updateStation(sheet.station.id, { startTime: value }); }} />
-                  <Field label={t("temperature") + " [°C]"} inputMode="decimal" value={sheet.meta.temperature} onChange={(value) => updateActive(protocol => ({ ...protocol, pageConditions: { ...protocol.pageConditions, [sheet.key]: { ...protocol.pageConditions?.[sheet.key], temperature: value } } }))} />
-                  <Field label={t("pressure") + " [hPa]"} inputMode="decimal" value={sheet.meta.pressure} onChange={(value) => updateActive(protocol => ({ ...protocol, pageConditions: { ...protocol.pageConditions, [sheet.key]: { ...protocol.pageConditions?.[sheet.key], pressure: value } } }))} />
+                  {showField("temperature") ? <Field label={t("temperature") + " [°C]"} inputMode="decimal" value={sheet.meta.temperature} onChange={(value) => updateActive(protocol => ({ ...protocol, pageConditions: { ...protocol.pageConditions, [sheet.key]: { ...protocol.pageConditions?.[sheet.key], temperature: value } } }))} /> : null}
+                  {showField("pressure") ? <Field label={t("pressure") + " [hPa]"} inputMode="decimal" value={sheet.meta.pressure} onChange={(value) => updateActive(protocol => ({ ...protocol, pageConditions: { ...protocol.pageConditions, [sheet.key]: { ...protocol.pageConditions?.[sheet.key], pressure: value } } }))} /> : null}
                 </fieldset>
               ))}
             </section> : null}
@@ -1193,7 +1319,13 @@ function HomeContent() {
             ) : null}
             <div className="target-form">
               <SuggestionField label={t("target")} value={targetForm.point} onChange={(point) => setTargetForm((form) => ({ ...form, point }))} onPick={pickPoint} suggestions={pointSuggestions} placeholder={t("pointPlaceholder")} />
-              <SelectField label={t("pointType")} value={targetForm.pointType} onChange={(pointType) => setTargetForm((form) => ({ ...form, pointType }))} options={POINT_TYPE_CHOICES} placeholder={t("noPointType")} />
+              <SelectField label={t("pointType")} value={customPointTypeMode ? CUSTOM_POINT_TYPE : targetForm.pointType} onChange={selectPointType} options={withCurrentType(pointTypeOptions, targetForm.pointType)} placeholder={t("noPointType")} />
+              {customPointTypeMode ? (
+                <>
+                  <Field label={t("pointTypeCode")} value={targetForm.pointType} onChange={(pointType) => setTargetForm((form) => ({ ...form, pointType: pointType.slice(0, 12) }))} placeholder={t("pointTypeCodePlaceholder")} />
+                  <Field label={t("pointTypeDetail")} value={customPointTypeDetail} onChange={setCustomPointTypeDetail} placeholder={t("pointTypeDetailPlaceholder")} />
+                </>
+              ) : null}
               <SuggestionField label={t("targetHeightUnit")} inputMode="decimal" value={targetForm.height} onChange={(height) => setTargetForm((form) => ({ ...form, height }))} suggestions={heightSuggestions} placeholder={t("exampleHeight")} />
               <label className="check-field rb-check-field">
                 <input type="checkbox" checked={targetForm.isBacksight} onChange={(event) => setTargetForm((form) => ({ ...form, isBacksight: event.target.checked, isConnectionPoint: event.target.checked ? false : form.isConnectionPoint }))} />
@@ -1296,7 +1428,7 @@ function HomeContent() {
             {valueEdit ? (
               <div className="value-editor">
                 <Field label={t("target")} value={valueEdit.point} onChange={(point) => setValueEdit({ ...valueEdit, point })} />
-                <SelectField label={t("pointType")} value={valueEdit.pointType} onChange={(pointType) => setValueEdit({ ...valueEdit, pointType })} options={POINT_TYPE_CHOICES} placeholder={t("noPointType")} />
+                <SelectField label={t("pointType")} value={valueEdit.pointType} onChange={(pointType) => setValueEdit({ ...valueEdit, pointType })} options={withCurrentType(savedPointTypeOptions, valueEdit.pointType)} placeholder={t("noPointType")} />
                 <Field label={t("targetHeightUnit")} inputMode="decimal" value={valueEdit.height} onChange={(height) => setValueEdit({ ...valueEdit, height })} />
                 <label className="check-field rb-check-field">
                   <input type="checkbox" checked={valueEdit.isBacksight} onChange={(event) => setValueEdit({ ...valueEdit, isBacksight: event.target.checked, isConnectionPoint: event.target.checked ? false : valueEdit.isConnectionPoint })} />
@@ -1332,31 +1464,119 @@ function HomeContent() {
         </Modal>
       ) : null}
 
-      {installHint ? (
-        <Modal title={t("offlineIphone")} onClose={() => setInstallHint(false)}>
-          <div className="install-steps">
-            {(["iphone1", "iphone2", "iphone3", "offlineInstall"] as const).map((key,index) => <div key={key}><span>{index+1}</span><p>{t(key)}</p></div>)}
-          </div>
-          <div className="modal-actions single"><button type="button" className="primary-button" onClick={() => setInstallHint(false)}>{t("understood")}</button></div>
-        </Modal>
-      ) : null}
 
-      {aboutOpen ? (
-        <Modal title={t("about")} onClose={() => setAboutOpen(false)}>
-          <div className="modal-scroll about-app">
-            <div className="about-brand"><span className="brand-mark" aria-hidden="true" /><div><h3>{t("appTitle")}</h3><p>{t("version", {version: "1.1.0"})}</p></div></div>
-            <section><h4>1. {t("about")}</h4><p>{t("author")}</p><p className="copyright">{t("copyright")}</p><p>{t("usageTerms")}</p><p>{t("restrictions")}</p></section>
-            <section className="about-action-section"><h4>2. {t("instructions")}</h4><p>{t("instructionIntro")}</p><button type="button" className="primary-button" onClick={() => { setAboutOpen(false); setInstructionOpen(true); }}>{t("openInstructions")}</button></section>
-            <section><h4>3. {t("install")}</h4><p><b>iPhone:</b> {t("iphoneInstall")}</p><p><b>Android:</b> {t("androidInstall")}</p><p>{t("offlineInstall")}</p></section>
-          </div>
-          <div className="modal-actions single"><button type="button" className="primary-button" onClick={() => setAboutOpen(false)}>{t("close")}</button></div>
-        </Modal>
-      ) : null}
 
       {instructionOpen ? (
-        <Modal title={t("instructions")} onClose={() => setInstructionOpen(false)} full>
-          <InstructionGuide />
-          <div className="modal-actions single"><button type="button" className="primary-button" onClick={() => setInstructionOpen(false)}>{t("closeInstructions")}</button></div>
+        <Modal title={t("help")} onClose={() => setInstructionOpen(false)} full>
+          <InstructionGuide>
+            <section className="about-app help-about">
+              <div className="about-brand"><span className="brand-mark" aria-hidden="true" /><div><h3>{t("appTitle")}</h3><p>{t("version", {version: APP_VERSION})}</p></div></div>
+              <section><h4>{t("about")}</h4><p>{t("author")}</p><p className="copyright">{t("copyright")}</p><p>{t("usageTerms")}</p><p>{t("restrictions")}</p></section>
+              <section><h4>{t("install")}</h4><p><b>iPhone:</b> {t("iphoneInstall")}</p><p><b>Android:</b> {t("androidInstall")}</p><p>{t("offlineInstall")}</p></section>
+            </section>
+          </InstructionGuide>
+          <div className="modal-actions single"><button type="button" className="primary-button" onClick={() => setInstructionOpen(false)}>{t("close")}</button></div>
+        </Modal>
+      ) : null}
+
+      {menuOpen ? (
+        <Modal title={t("menu")} onClose={() => setMenuOpen(false)}>
+          <div className="modal-scroll app-menu">
+            <button type="button" className="primary-button menu-new" onClick={() => { setMenuOpen(false); startNewProtocol(); }}>
+              <span aria-hidden="true">+</span>{t("newProtocol")}
+            </button>
+            <div className="menu-group">
+              <button type="button" className="menu-row" onClick={() => { setMenuOpen(false); setProtocolsOpen(true); }}>
+                <span className="menu-icon green" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M7 3h8l4 4v14H7z" /><path d="M15 3v4h4M10 12h6M10 16h6" /></svg></span>
+                <span className="menu-copy"><b>{t("protocols")}</b></span>
+                <span className="count-badge">{store.protocols.length}</span><span className="menu-chevron" aria-hidden="true">›</span>
+              </button>
+              <button type="button" className="menu-row" onClick={() => { setMenuOpen(false); setValuesOpen(true); }}>
+                <span className="menu-icon blue" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 4h11a3 3 0 0 1 3 3v13H8a3 3 0 0 1-3-3z" /><path d="M5 17a3 3 0 0 1 3-3h11" /></svg></span>
+                <span className="menu-copy"><b>{t("values")}</b></span>
+                <span className="menu-chevron" aria-hidden="true">›</span>
+              </button>
+              <button type="button" className="menu-row" onClick={() => { setMenuOpen(false); openBackupCenter(); }}>
+                <span className="menu-icon orange" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M7 18h10a4 4 0 0 0 .5-8A6 6 0 0 0 6 11a3.5 3.5 0 0 0 1 7z" /><path d="M12 16v-5M9.5 13.5 12 11l2.5 2.5" /></svg></span>
+                <span className="menu-copy"><b>{t("backupMenu")}</b>
+                  <small>{t("lastBackup")}: {formatBackupDate(store.lastBackupAt, language)}</small></span>
+                {backupNeeded ? <span className="menu-warning">{t("backupNeededBadge")}</span> : null}
+                <span className="menu-chevron" aria-hidden="true">›</span>
+              </button>
+            </div>
+            <div className="menu-group">
+              <button type="button" className="menu-row" onClick={() => { setMenuOpen(false); setInstructionOpen(true); }}>
+                <span className="menu-icon blue" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" /><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .9-1 1.6V14M12 17.5v.01" /></svg></span>
+                <span className="menu-copy"><b>{t("help")}</b></span>
+                <span className="menu-chevron" aria-hidden="true">›</span>
+              </button>
+              <button type="button" className="menu-row" onClick={() => { setMenuOpen(false); setSettingsOpen(true); }}>
+                <span className="menu-icon green" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 17h4M12 17h8" /><circle cx="16" cy="7" r="2" /><circle cx="10" cy="17" r="2" /></svg></span>
+                <span className="menu-copy"><b>{t("settings")}</b></span>
+                <span className="menu-chevron" aria-hidden="true">›</span>
+              </button>
+            </div>
+            <div className="menu-theme">
+              <b id="menu-theme-label">{t("theme")}</b>
+              <div className="theme-segments" role="radiogroup" aria-labelledby="menu-theme-label">
+                {(["dark", "light", "auto"] as const).map((choice) => (
+                  <button type="button" role="radio" aria-checked={themeChoice === choice} key={choice}
+                    className={themeChoice === choice ? "on" : ""} onClick={() => setThemeChoice(choice)}>
+                    {t(choice === "dark" ? "themeDark" : choice === "light" ? "themeLight" : "themeAuto")}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        </Modal>
+      ) : null}
+
+      {settingsOpen ? (
+        <Modal title={t("settings")} onClose={() => setSettingsOpen(false)} wide>
+          <div className="modal-scroll settings-sheet">
+            <section>
+              <h3>{t("projectFields")}</h3>
+              <p className="helper-text">{t("projectFieldsHint")}</p>
+              <div className="settings-list">
+                {HIDEABLE_FIELDS.map((key) => (
+                  <label className="settings-row" key={key}>
+                    <span><b>{t(FIELD_LABELS[key])}</b></span>
+                    <input type="checkbox" className="switch" checked={showField(key)}
+                      onChange={(event) => setStore((current) => ({ ...current, hiddenFields: event.target.checked
+                        ? (current.hiddenFields ?? []).filter((item) => item !== key) : [...(current.hiddenFields ?? []), key] }))} />
+                  </label>
+                ))}
+              </div>
+            </section>
+            <section>
+              <h3>{t("standardPointTypes")}</h3>
+              <p className="helper-text">{t("standardPointTypesHint")}</p>
+              <div className="settings-list">
+                {POINT_TYPE_CHOICES.map((choice) => (
+                  <label className="settings-row" key={choice.value}>
+                    <span><b>{choice.label}</b><small>{choice.detail}</small></span>
+                    <input type="checkbox" className="switch" checked={!hiddenPointTypes.has(choice.value)}
+                      onChange={(event) => setStore((current) => ({ ...current, hiddenPointTypes: event.target.checked
+                        ? (current.hiddenPointTypes ?? []).filter((code) => code !== choice.value) : [...(current.hiddenPointTypes ?? []), choice.value] }))} />
+                  </label>
+                ))}
+              </div>
+            </section>
+            <section>
+              <h3>{t("customPointTypes")}</h3>
+              {customPointTypes.length ? (
+                <div className="settings-list">
+                  {customPointTypes.map((item) => (
+                    <div className="settings-row" key={item.code}>
+                      <span><b>{item.code}</b>{item.detail ? <small>{item.detail}</small> : null}</span>
+                      <button type="button" className="quiet-button" aria-label={`${t("deleteCustomPointType")}: ${item.code}`} onClick={() => removeCustomPointType(item.code)}>{t("remove")}</button>
+                    </div>
+                  ))}
+                </div>
+              ) : <p className="helper-text">{t("noCustomPointTypes")}</p>}
+            </section>
+          </div>
+          <div className="modal-actions single"><button type="button" className="primary-button" onClick={() => setSettingsOpen(false)}>{t("close")}</button></div>
         </Modal>
       ) : null}
 
