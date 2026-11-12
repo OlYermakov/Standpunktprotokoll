@@ -16,7 +16,7 @@
     "db:generate": "bash scripts/sites-env.sh -- drizzle-kit generate",
     "build:pages": "vite build --config vite.pages.config.ts && node scripts/prepare-pages.mjs",
     "preview:pages": "vite preview --config vite.pages.config.ts",
-    "test:pages": "node --test tests/localization.test.mjs tests/pdf-localization.test.mjs tests/pages.test.mjs"
+    "test:pages": "node --test tests/localization.test.mjs tests/pdf-localization.test.mjs tests/pages.test.mjs tests/custom-branding.test.mjs"
   },
   "dependencies": {
     "drizzle-orm": "0.45.2",

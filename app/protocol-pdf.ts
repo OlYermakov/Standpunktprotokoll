@@ -127,7 +127,28 @@ function drawPdfHeader(doc: jsPDF, protocol: Protocol, logoDataUri: string | und
   drawPdfMetaField(doc, t("temperature") + ":", protocol.meta.temperature ? `${protocol.meta.temperature} °C` : "", 154.2, 8.6, 42.5);
   drawPdfMetaField(doc, t("pressure") + ":", protocol.meta.pressure ? `${protocol.meta.pressure} hPa` : "", 203, 8.6, 42.5);
 
-  if (protocol.meta.showCompanyLogo && logoDataUri) {
+  if (protocol.meta.showCompanyLogo && protocol.companyLogo) {
+    // Custom logo: fixed height, right-aligned, width follows the image (max 42 mm).
+    const custom = protocol.companyLogo;
+    const right = 292;
+    let height = 9.29;
+    let width = height * (custom.width / custom.height);
+    if (width > 42) { width = 42; height = width * (custom.height / custom.width); }
+    doc.addImage(custom.dataUri, "PNG", right - width, 2.5, width, height, undefined, "FAST");
+    const caption = custom.caption.trim();
+    if (caption) {
+      doc.setTextColor(8, 8, 8);
+      doc.setFont("ProtocolSans", "normal");
+      const maxWidth = Math.max(width, 18);
+      let size = 4.1;
+      doc.setFontSize(size);
+      while (doc.getTextWidth(caption) > maxWidth && size > 2.8) {
+        size -= 0.1;
+        doc.setFontSize(size);
+      }
+      doc.text(caption, right - maxWidth / 2, 2.5 + height + 1.8, { align: "center", maxWidth });
+    }
+  } else if (protocol.meta.showCompanyLogo && logoDataUri) {
     const brandX = 274;
     const brandWidth = 18;
     doc.addImage(logoDataUri, "PNG", brandX, 2.5, brandWidth, 9.29, undefined, "FAST");

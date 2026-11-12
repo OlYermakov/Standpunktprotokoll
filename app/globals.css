@@ -662,3 +662,26 @@ details[open] > summary .chevron { transform: rotate(180deg); }
 .page-weather-review > p { color: var(--muted); line-height: 1.5; font-size: 13px; }
 .page-weather-fields { min-width: 0; margin: 16px 0; padding: 14px; border: 1px solid var(--line); border-radius: 12px; display: grid; gap: 12px; }
 .page-weather-fields legend { max-width: 100%; overflow-wrap: anywhere; font-weight: 600; font-size: 14px; }
+
+/* Own company logo + own point types (iOS copy) */
+.company-logo-settings { grid-column: 1 / -1; display: grid; grid-template-columns: 112px 1fr; gap: 12px; align-items: center; padding: 12px 13px; border: 1px solid var(--line); border-radius: 13px; background: var(--surface-soft); }
+.company-logo-preview { height: 64px; display: flex; align-items: center; justify-content: center; padding: 6px; border-radius: 9px; background: #fff; }
+.company-logo-preview img { max-width: 100%; max-height: 100%; object-fit: contain; }
+.company-logo-copy b, .company-logo-copy small { display: block; }
+.company-logo-copy b { font-size: 13px; }
+.company-logo-copy small { margin-top: 2px; color: var(--muted); font-size: 11px; }
+.company-logo-actions { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 8px; }
+.company-logo-actions button { min-height: 36px; padding: 0 12px; font-size: 13px; line-height: 1.15; }
+.company-logo-settings .company-logo-error { color: #f05d4b; }
+.company-logo-settings > .field { grid-column: 1 / -1; }
+.custom-point-types { margin: 4px 0 14px; display: grid; gap: 6px; }
+.custom-point-types h3 { margin: 0 0 2px; font-size: 13px; }
+.custom-point-type { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 11px; background: var(--surface-soft); }
+.custom-point-type b, .custom-point-type small { display: block; }
+.custom-point-type small { color: var(--muted); font-size: 11px; }
+.custom-point-type button { min-width: 38px; min-height: 38px; font-size: 18px; }
+@media print {
+  .print-brand-custom { width: auto; max-width: 42mm; }
+  .print-logo-custom { display: block; max-width: 42mm; height: 9.29mm; object-fit: contain; object-position: right center; }
+  .print-brand-custom span { width: auto; max-width: 42mm; }
+}

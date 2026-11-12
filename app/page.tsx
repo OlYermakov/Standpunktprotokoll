@@ -8,7 +8,7 @@ import { InstructionGuide } from "./instructions";
 import { protocolPointSuggestions, lastInstrumentHeightSuggestions } from "./protocol-points";
 import { abbreviation, prismAbbreviation, formatDate, formatBackupDate, countLabel, translate, LOCALES, remarkChoices, pointTypeChoices, type Language, type MessageKey, type MessageParams } from "./i18n";
 import { loadPdfFonts } from "./pdf-fonts";
-import { buildPageMetadata, buildPrintPages, PRINT_ROWS_PER_PANEL, protocolLegendEntries, targetRemark, type Protocol, type ProtocolMeta, type Station, type Target } from "./protocol-print";
+import { buildPageMetadata, buildPrintPages, PRINT_ROWS_PER_PANEL, protocolLegendEntries, targetRemark, type CompanyLogo, type CustomPointType, type Protocol, type ProtocolMeta, type Station, type Target } from "./protocol-print";
 
 const loadProtocolPdf = () => import("./protocol-pdf");
 
@@ -18,6 +18,7 @@ type SavedCombination = {
 };
 type Store = {
   version: 1; activeProtocolId: string; protocols: Protocol[]; savedCombinations: SavedCombination[]; lastBackupAt?: string;
+  customPointTypes?: CustomPointType[]; companyLogo?: CompanyLogo;
 };
 type StoreSnapshot = { id: string; createdAt: string; store: Store };
 type BackupFile = { format: "standpunktprotokoll-backup"; version: 1; createdAt: string; store: Store };
@@ -33,6 +34,60 @@ type Choice = { value: string; label: string; detail?: string };
 type UiTheme = "dark" | "light";
 
 const CUSTOM_REMARK = "__custom__";
+const CUSTOM_POINT_TYPE = "__custom_point_type__";
+const LOGO_MAX_PX = 900;
+
+function normalizeCustomPointTypes(value: unknown): CustomPointType[] {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set<string>();
+  return value.flatMap((item) => {
+    const code = typeof item?.code === "string" ? item.code.trim() : "";
+    if (!code || seen.has(code)) return [];
+    seen.add(code);
+    return [{ code, detail: typeof item.detail === "string" ? item.detail.trim() : "" }];
+  });
+}
+
+function normalizeCompanyLogo(value: unknown): CompanyLogo | undefined {
+  const logo = value as Partial<CompanyLogo> | undefined;
+  if (!logo || typeof logo.dataUri !== "string" || !logo.dataUri.startsWith("data:image/png")) return undefined;
+  const width = Number(logo.width), height = Number(logo.height);
+  if (!(width > 0 && height > 0)) return undefined;
+  return { dataUri: logo.dataUri, width, height, caption: typeof logo.caption === "string" ? logo.caption : "" };
+}
+
+/** Adds a point type, or updates its description; an empty description never wipes an existing one. */
+function upsertCustomPointType(items: CustomPointType[], next: CustomPointType): CustomPointType[] {
+  const existing = items.find((item) => item.code === next.code);
+  if (!existing) return [...items, next];
+  if (!next.detail) return items;
+  return items.map((item) => item.code === next.code ? next : item);
+}
+
+/** Reads any image the browser can decode and re-encodes it as a PNG of at most LOGO_MAX_PX. */
+async function readLogoFile(file: File): Promise<CompanyLogo> {
+  const url = URL.createObjectURL(file);
+  try {
+    const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const element = new Image();
+      element.onload = () => resolve(element);
+      element.onerror = () => reject(new Error("logo"));
+      element.src = url;
+    });
+    const scale = Math.min(1, LOGO_MAX_PX / Math.max(image.naturalWidth, image.naturalHeight));
+    const width = Math.max(1, Math.round(image.naturalWidth * scale));
+    const height = Math.max(1, Math.round(image.naturalHeight * scale));
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext("2d");
+    if (!context) throw new Error("logo");
+    context.drawImage(image, 0, 0, width, height);
+    return { dataUri: canvas.toDataURL("image/png"), width, height, caption: "" };
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
 
 const DEFAULT_TARGET_FORM: TargetForm = {
   point: "", height: "", remark: "", pointType: "", isBacksight: false, isConnectionPoint: false,
@@ -187,6 +242,8 @@ function normalizeStore(value: unknown): Store | null {
     protocols,
     savedCombinations: normalizeSavedCombinations(parsed.savedCombinations ?? []),
     lastBackupAt: typeof parsed.lastBackupAt === "string" ? parsed.lastBackupAt : undefined,
+    customPointTypes: normalizeCustomPointTypes(parsed.customPointTypes),
+    companyLogo: normalizeCompanyLogo(parsed.companyLogo),
   };
 }
 
@@ -502,7 +559,7 @@ function pdfFilename(protocol: Protocol, language: Language) {
 
 async function createProtocolPdf(protocol: Protocol, language: Language) {
   const { buildProtocolPdf, loadAitLogoDataUri } = await loadProtocolPdf();
-  const [fonts, logoDataUri] = await Promise.all([loadPdfFonts(), protocol.meta.showCompanyLogo ? loadAitLogoDataUri() : undefined]);
+  const [fonts, logoDataUri] = await Promise.all([loadPdfFonts(), protocol.meta.showCompanyLogo && !protocol.companyLogo ? loadAitLogoDataUri() : undefined]);
   return buildProtocolPdf(protocol, logoDataUri, language, fonts);
 }
 
@@ -567,7 +624,13 @@ const PrintProtocol = memo(function PrintProtocol({ protocol }: { protocol: Prot
             <PrintMetaField className="print-fp-file" label={t("fpFile") + ":"} value={protocol.meta.fpFile} />
             <PrintMetaField className="print-temperature" label={t("temperature") + ":"} value={pageMetadata[pageIndex].meta.temperature ? `${pageMetadata[pageIndex].meta.temperature} °C` : ""} />
             <PrintMetaField className="print-pressure" label={t("pressure") + ":"} value={pageMetadata[pageIndex].meta.pressure ? `${pageMetadata[pageIndex].meta.pressure} hPa` : ""} />
-            {protocol.meta.showCompanyLogo ? (
+            {protocol.meta.showCompanyLogo && protocol.companyLogo ? (
+              <div className="print-brand print-brand-custom">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img className="print-logo-custom" src={protocol.companyLogo.dataUri} alt="" />
+                {protocol.companyLogo.caption.trim() ? <span>{protocol.companyLogo.caption}</span> : null}
+              </div>
+            ) : protocol.meta.showCompanyLogo ? (
               <div className="print-brand" aria-label={`A.I.T. GmbH - ${t("companyCaption")}`}>
                 <div className="print-logo" aria-hidden="true" />
                 <span>{t("companyCaption")}</span>
@@ -622,6 +685,10 @@ function HomeContent() {
   const [targetSheet, setTargetSheet] = useState<TargetSheet | null>(null);
   const [targetForm, setTargetForm] = useState<TargetForm>(DEFAULT_TARGET_FORM);
   const [customRemarkMode, setCustomRemarkMode] = useState(false);
+  const [customPointTypeMode, setCustomPointTypeMode] = useState(false);
+  const [customPointTypeDetail, setCustomPointTypeDetail] = useState("");
+  const [logoError, setLogoError] = useState(false);
+  const logoInputRef = useRef<HTMLInputElement>(null);
   const [protocolsOpen, setProtocolsOpen] = useState(false);
   const [valuesOpen, setValuesOpen] = useState(false);
   const [installHint, setInstallHint] = useState(false);
@@ -750,10 +817,21 @@ function HomeContent() {
       .map((value) => ({ value, label: value, detail: t("previous") }));
     return [...REMARK_CHOICES, ...previous, { value: CUSTOM_REMARK, label: t("other"), detail: t("enterRemark") }];
   }, [store.savedCombinations, REMARK_CHOICES, t]);
+  const customPointTypes = useMemo(() => store.customPointTypes ?? [], [store.customPointTypes]);
+  const savedPointTypeOptions = useMemo<Choice[]>(() => {
+    const standard = new Set<string>(POINT_TYPE_CHOICES.map((option) => option.value));
+    return [...POINT_TYPE_CHOICES, ...customPointTypes.filter((item) => !standard.has(item.code))
+      .map((item) => ({ value: item.code, label: item.code, detail: item.detail || t("customPointType") }))];
+  }, [POINT_TYPE_CHOICES, customPointTypes, t]);
+  const pointTypeOptions = useMemo<Choice[]>(() => [...savedPointTypeOptions,
+    { value: CUSTOM_POINT_TYPE, label: t("customPointType"), detail: t("enterPointType") }], [savedPointTypeOptions, t]);
   const recentCombinations = useMemo(() => [...store.savedCombinations]
     .sort((a, b) => b.lastUsedAt.localeCompare(a.lastUsedAt)).slice(0, 12), [store.savedCombinations]);
   const pdfSheets = useMemo(() => pdfActionsOpen && activeProtocol ? buildPageMetadata(activeProtocol) : [], [pdfActionsOpen, activeProtocol]);
-  const printableProtocol = useDeferredValue(activeProtocol);
+  // App-wide settings (own logo, own point types) travel with the protocol into print and PDF.
+  const brandedProtocol = useMemo<Protocol>(() => ({ ...activeProtocol, customPointTypes, companyLogo: store.companyLogo }),
+    [activeProtocol, customPointTypes, store.companyLogo]);
+  const printableProtocol = useDeferredValue(brandedProtocol);
   const backupNeeded = useMemo(() => {
     if (!hasMeaningfulData(store)) return false;
     if (!store.lastBackupAt) return true;
@@ -856,6 +934,8 @@ function HomeContent() {
     if (!stationId) return;
     const last = recentCombinations[0];
     setCustomRemarkMode(false);
+    setCustomPointTypeMode(false);
+    setCustomPointTypeDetail("");
     setTargetForm({
       ...DEFAULT_TARGET_FORM,
       height: last?.height ?? "",
@@ -865,6 +945,8 @@ function HomeContent() {
 
   function openEditTarget(stationId: string, target: Target) {
     setCustomRemarkMode(Boolean(target.remark && !remarkOptions.some((option) => option.value === target.remark)));
+    setCustomPointTypeMode(Boolean(target.pointType && !savedPointTypeOptions.some((option) => option.value === target.pointType)));
+    setCustomPointTypeDetail("");
     setTargetForm({
       point: target.point, height: target.height, remark: target.remark, pointType: target.pointType,
       isBacksight: target.isBacksight, isConnectionPoint: target.isConnectionPoint,
@@ -885,6 +967,35 @@ function HomeContent() {
       isConnectionPoint: match?.isConnectionPoint ?? form.isConnectionPoint,
     }));
     if (match?.remark) setCustomRemarkMode(!remarkOptions.some((option) => option.value === match.remark));
+    if (match?.pointType) setCustomPointTypeMode(!savedPointTypeOptions.some((option) => option.value === match.pointType));
+  }
+
+  function selectPointType(pointType: string) {
+    if (pointType === CUSTOM_POINT_TYPE) {
+      setCustomPointTypeMode(true);
+      setCustomPointTypeDetail("");
+      setTargetForm((form) => ({ ...form, pointType: "" }));
+      return;
+    }
+    setCustomPointTypeMode(false);
+    setTargetForm((form) => ({ ...form, pointType }));
+  }
+
+  function removeCustomPointType(code: string) {
+    setStore((current) => ({ ...current, customPointTypes: (current.customPointTypes ?? []).filter((item) => item.code !== code) }));
+  }
+
+  async function chooseLogo(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    try {
+      const logo = await readLogoFile(file);
+      setLogoError(false);
+      setStore((current) => ({ ...current, companyLogo: { ...logo, caption: current.companyLogo?.caption ?? "" } }));
+    } catch {
+      setLogoError(true);
+    }
   }
 
   function selectRemark(remark: string) {
@@ -905,11 +1016,15 @@ function HomeContent() {
     const normalizedRemark = normalizeTargetRemark(targetForm.remark, targetForm.isBacksight, targetForm.isConnectionPoint);
     const cleaned: TargetForm = {
       ...targetForm, point: targetForm.point.trim(), height: normalizeHeight(targetForm.height),
+      pointType: targetForm.pointType.trim(),
       ...normalizedRemark,
     };
     const targetId = targetSheet.targetId;
+    const newPointType = customPointTypeMode && cleaned.pointType && !POINT_TYPE_CHOICES.some((option) => option.value === cleaned.pointType)
+      ? { code: cleaned.pointType, detail: customPointTypeDetail.trim() } : null;
     setStore((current) => ({
       ...current,
+      customPointTypes: newPointType ? upsertCustomPointType(current.customPointTypes ?? [], newPointType) : current.customPointTypes,
       savedCombinations: rememberCombination(current.savedCombinations, cleaned),
       protocols: current.protocols.map((protocol) => protocol.id === current.activeProtocolId ? {
         ...protocol, updatedAt: nowIso(),
@@ -974,11 +1089,11 @@ function HomeContent() {
   }
 
   function printProtocol() {
-    void downloadProtocolPdf(activeProtocol, language).catch(() => window.alert(t("pdfError")));
+    void downloadProtocolPdf(brandedProtocol, language).catch(() => window.alert(t("pdfError")));
   }
 
   function shareProtocol() {
-    void shareProtocolPdf(activeProtocol, language).catch(() => window.alert(t("pdfError")));
+    void shareProtocolPdf(brandedProtocol, language).catch(() => window.alert(t("pdfError")));
   }
 
   function saveEditedValue() {
@@ -1073,6 +1188,28 @@ function HomeContent() {
               <input type="checkbox" checked={activeProtocol.meta.showCompanyLogo} onChange={(event) => updateMeta("showCompanyLogo", event.target.checked)} />
               <span><b>{t("showLogo")}</b><small>{t("logoDetail")}</small></span>
             </label>
+            {activeProtocol.meta.showCompanyLogo ? (
+              <div className="company-logo-settings">
+                <div className="company-logo-preview">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={store.companyLogo?.dataUri ?? assetUrl("/ait-logo.png")} alt={t("companyLogo")} />
+                </div>
+                <div className="company-logo-copy">
+                  <b>{t("companyLogo")}</b>
+                  <small>{t("companyLogoDetail")}</small>
+                  <div className="company-logo-actions">
+                    <button type="button" className="secondary-button" onClick={() => logoInputRef.current?.click()}>{store.companyLogo ? t("replaceLogo") : t("uploadLogo")}</button>
+                    {store.companyLogo ? <button type="button" className="quiet-button" onClick={() => setStore((current) => ({ ...current, companyLogo: undefined }))}>{t("resetLogo")}</button> : null}
+                  </div>
+                  {logoError ? <small className="company-logo-error" role="alert">{t("logoError")}</small> : null}
+                </div>
+                {store.companyLogo ? (
+                  <Field label={t("logoCaption")} value={store.companyLogo.caption} placeholder={t("logoCaptionPlaceholder")}
+                    onChange={(caption) => setStore((current) => current.companyLogo ? { ...current, companyLogo: { ...current.companyLogo, caption } } : current)} />
+                ) : null}
+                <input ref={logoInputRef} className="visually-hidden" type="file" accept="image/png,image/jpeg,image/webp,image/heic,image/*" onChange={(event) => void chooseLogo(event)} />
+              </div>
+            ) : null}
           </div>
         </Disclosure>
 
@@ -1193,7 +1330,13 @@ function HomeContent() {
             ) : null}
             <div className="target-form">
               <SuggestionField label={t("target")} value={targetForm.point} onChange={(point) => setTargetForm((form) => ({ ...form, point }))} onPick={pickPoint} suggestions={pointSuggestions} placeholder={t("pointPlaceholder")} />
-              <SelectField label={t("pointType")} value={targetForm.pointType} onChange={(pointType) => setTargetForm((form) => ({ ...form, pointType }))} options={POINT_TYPE_CHOICES} placeholder={t("noPointType")} />
+              <SelectField label={t("pointType")} value={customPointTypeMode ? CUSTOM_POINT_TYPE : targetForm.pointType} onChange={selectPointType} options={pointTypeOptions} placeholder={t("noPointType")} />
+              {customPointTypeMode ? (
+                <>
+                  <Field label={t("pointTypeCode")} value={targetForm.pointType} onChange={(pointType) => setTargetForm((form) => ({ ...form, pointType: pointType.slice(0, 12) }))} placeholder={t("pointTypeCodePlaceholder")} />
+                  <Field label={t("pointTypeDetail")} value={customPointTypeDetail} onChange={setCustomPointTypeDetail} placeholder={t("pointTypeDetailPlaceholder")} />
+                </>
+              ) : null}
               <SuggestionField label={t("targetHeightUnit")} inputMode="decimal" value={targetForm.height} onChange={(height) => setTargetForm((form) => ({ ...form, height }))} suggestions={heightSuggestions} placeholder={t("exampleHeight")} />
               <label className="check-field rb-check-field">
                 <input type="checkbox" checked={targetForm.isBacksight} onChange={(event) => setTargetForm((form) => ({ ...form, isBacksight: event.target.checked, isConnectionPoint: event.target.checked ? false : form.isConnectionPoint }))} />
@@ -1293,10 +1436,21 @@ function HomeContent() {
         <Modal title={t("valueDirectory")} onClose={() => { setValuesOpen(false); setValueEdit(null); }} wide>
           <div className="modal-scroll values-browser">
             <p className="helper-text">{t("valueHint")}</p>
+            {!valueEdit && customPointTypes.length ? (
+              <div className="custom-point-types">
+                <h3>{t("customPointTypes")}</h3>
+                {customPointTypes.map((item) => (
+                  <div className="custom-point-type" key={item.code}>
+                    <span><b>{item.code}</b>{item.detail ? <small>{item.detail}</small> : null}</span>
+                    <button type="button" className="quiet-button" aria-label={`${t("deleteCustomPointType")}: ${item.code}`} onClick={() => removeCustomPointType(item.code)}>×</button>
+                  </div>
+                ))}
+              </div>
+            ) : null}
             {valueEdit ? (
               <div className="value-editor">
                 <Field label={t("target")} value={valueEdit.point} onChange={(point) => setValueEdit({ ...valueEdit, point })} />
-                <SelectField label={t("pointType")} value={valueEdit.pointType} onChange={(pointType) => setValueEdit({ ...valueEdit, pointType })} options={POINT_TYPE_CHOICES} placeholder={t("noPointType")} />
+                <SelectField label={t("pointType")} value={valueEdit.pointType} onChange={(pointType) => setValueEdit({ ...valueEdit, pointType })} options={savedPointTypeOptions} placeholder={t("noPointType")} />
                 <Field label={t("targetHeightUnit")} inputMode="decimal" value={valueEdit.height} onChange={(height) => setValueEdit({ ...valueEdit, height })} />
                 <label className="check-field rb-check-field">
                   <input type="checkbox" checked={valueEdit.isBacksight} onChange={(event) => setValueEdit({ ...valueEdit, isBacksight: event.target.checked, isConnectionPoint: event.target.checked ? false : valueEdit.isConnectionPoint })} />

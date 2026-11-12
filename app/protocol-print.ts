@@ -14,7 +14,12 @@ export type ProtocolMeta = {
   instrument: string; crew: string; temperature: string; pressure: string; fpSynced: string; fpFile: string;
   showCompanyLogo: boolean;
 };
-export type Protocol = { id: string; createdAt: string; updatedAt: string; meta: ProtocolMeta; stations: Station[]; pageConditions?: Record<string, { temperature?: string; pressure?: string }> };
+/** User-defined point type: shown in pickers and explained in the PDF legend. */
+export type CustomPointType = { code: string; detail: string };
+/** User-supplied company logo (PNG data URI, pixel size) with an optional caption. */
+export type CompanyLogo = { dataUri: string; width: number; height: number; caption: string };
+// customPointTypes / companyLogo are app-wide settings attached only when rendering a protocol.
+export type Protocol = { customPointTypes?: CustomPointType[]; companyLogo?: CompanyLogo; id: string; createdAt: string; updatedAt: string; meta: ProtocolMeta; stations: Station[]; pageConditions?: Record<string, { temperature?: string; pressure?: string }> };
 
 export function formatProtocolHeight(value: string, language: Language) {
   const trimmed = value.trim();
@@ -44,6 +49,11 @@ export function protocolLegendEntries(protocol: Protocol, language: Language): L
   if (targets.some((target) => target.isConnectionPoint)) entries.push({ abbreviation: abbreviation("AP", language), description: t("connection") });
   POINT_TYPE_CHOICES.forEach((choice) => {
     if (usedPointTypes.has(choice.value)) entries.push({ abbreviation: abbreviation(choice.value, language), description: choice.detail });
+  });
+  const standardTypes = new Set<string>(POINT_TYPE_CHOICES.map((choice) => choice.value));
+  [...usedPointTypes].filter((code) => !standardTypes.has(code)).forEach((code) => {
+    const custom = protocol.customPointTypes?.find((item) => item.code === code);
+    entries.push({ abbreviation: code, description: custom?.detail || t("customPointType") });
   });
   REMARK_CHOICES.forEach((choice) => {
     if (usedPrisms.has(choice.value)) entries.push({ abbreviation: prismAbbreviation(choice.value, language), description: PRISM_LEGEND[choice.value] });
