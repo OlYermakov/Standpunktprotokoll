@@ -114,18 +114,26 @@ function drawPdfHeader(doc: jsPDF, protocol: Protocol, logoDataUri: string | und
   doc.setFontSize(7.3);
   doc.text(t("appTitle"), 6, 8);
 
-  drawPdfMetaField(doc, t("project") + ":", protocol.meta.project, 6, 8.6, 69);
-  drawPdfMetaField(doc, t("date") + ":", formatDate(protocol.meta.date, language), 6, 13.8, 69);
-  drawPdfMetaField(doc, t("instrument") + ":", protocol.meta.instrument, 6, 19, 69);
-  drawPdfMetaField(doc, t("fpStatus") + ":", protocol.meta.fpSynced, 6, 24.2, 69);
+  // Fields the user switched off are skipped; the remaining ones move up so no empty lines are printed.
+  const hidden = new Set(protocol.hiddenFields ?? []);
+  const fields: [string | null, string, string][] = [
+    [null, t("project") + ":", protocol.meta.project],
+    [null, t("date") + ":", formatDate(protocol.meta.date, language)],
+    ["instrument", t("instrument") + ":", protocol.meta.instrument],
+    ["fpSynced", t("fpStatus") + ":", protocol.meta.fpSynced],
+    ["projectNumber", t("projectNumber") + ":", protocol.meta.projectNumber],
+    ["startTime", t("time") + ":", protocol.meta.startTime],
+    ["crew", t("crew"), protocol.meta.crew],
+    ["fpFile", t("fpFile") + ":", protocol.meta.fpFile],
+  ];
+  const slots: [number, number, number][] = [[6, 8.6, 69], [6, 13.8, 69], [6, 19, 69], [6, 24.2, 69], [83.5, 8.6, 64], [83.5, 13.8, 64], [83.5, 19, 64], [83.5, 24.2, 64]];
+  fields.filter(([key]) => !key || !hidden.has(key)).forEach(([, label, value], index) => {
+    const [x, y, width] = slots[index];
+    drawPdfMetaField(doc, label, value, x, y, width);
+  });
 
-  drawPdfMetaField(doc, t("projectNumber") + ":", protocol.meta.projectNumber, 83.5, 8.6, 64);
-  drawPdfMetaField(doc, t("time") + ":", protocol.meta.startTime, 83.5, 13.8, 64);
-  drawPdfMetaField(doc, t("crew"), protocol.meta.crew, 83.5, 19, 64);
-  drawPdfMetaField(doc, t("fpFile") + ":", protocol.meta.fpFile, 83.5, 24.2, 64);
-
-  drawPdfMetaField(doc, t("temperature") + ":", protocol.meta.temperature ? `${protocol.meta.temperature} °C` : "", 154.2, 8.6, 42.5);
-  drawPdfMetaField(doc, t("pressure") + ":", protocol.meta.pressure ? `${protocol.meta.pressure} hPa` : "", 203, 8.6, 42.5);
+  if (!hidden.has("temperature")) drawPdfMetaField(doc, t("temperature") + ":", protocol.meta.temperature ? `${protocol.meta.temperature} °C` : "", 154.2, 8.6, 42.5);
+  if (!hidden.has("pressure")) drawPdfMetaField(doc, t("pressure") + ":", protocol.meta.pressure ? `${protocol.meta.pressure} hPa` : "", hidden.has("temperature") ? 154.2 : 203, 8.6, 42.5);
 
   if (protocol.meta.showCompanyLogo && protocol.companyLogo) {
     // Custom logo: fixed height, right-aligned, width follows the image (max 42 mm).

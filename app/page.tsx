@@ -8,7 +8,7 @@ import { InstructionGuide } from "./instructions";
 import { protocolPointSuggestions, lastInstrumentHeightSuggestions } from "./protocol-points";
 import { abbreviation, prismAbbreviation, formatDate, formatBackupDate, countLabel, translate, LOCALES, remarkChoices, pointTypeChoices, type Language, type MessageKey, type MessageParams } from "./i18n";
 import { loadPdfFonts } from "./pdf-fonts";
-import { buildPageMetadata, buildPrintPages, PRINT_ROWS_PER_PANEL, protocolLegendEntries, targetRemark, type CompanyLogo, type CustomPointType, type Protocol, type ProtocolMeta, type Station, type Target } from "./protocol-print";
+import { buildPageMetadata, buildPrintPages, PRINT_ROWS_PER_PANEL, protocolLegendEntries, targetRemark, HIDEABLE_FIELDS, type HideableField, type CompanyLogo, type CustomPointType, type Protocol, type ProtocolMeta, type Station, type Target } from "./protocol-print";
 
 const loadProtocolPdf = () => import("./protocol-pdf");
 
@@ -19,6 +19,7 @@ type SavedCombination = {
 type Store = {
   version: 1; activeProtocolId: string; protocols: Protocol[]; savedCombinations: SavedCombination[]; lastBackupAt?: string;
   customPointTypes?: CustomPointType[]; companyLogo?: CompanyLogo;
+  hiddenPointTypes?: string[]; hiddenFields?: HideableField[];
 };
 type StoreSnapshot = { id: string; createdAt: string; store: Store };
 type BackupFile = { format: "standpunktprotokoll-backup"; version: 1; createdAt: string; store: Store };
@@ -38,6 +39,10 @@ const CUSTOM_REMARK = "__custom__";
 const CUSTOM_POINT_TYPE = "__custom_point_type__";
 const LOGO_MAX_PX = 900;
 const APP_VERSION = "1.2.0";
+const FIELD_LABELS: Record<HideableField, MessageKey> = {
+  projectNumber: "projectNumber", startTime: "start", instrument: "instrument", crew: "crew",
+  temperature: "temperature", pressure: "pressure", fpSynced: "fpStatus", fpFile: "fpFile",
+};
 
 function normalizeCustomPointTypes(value: unknown): CustomPointType[] {
   if (!Array.isArray(value)) return [];
@@ -246,6 +251,8 @@ function normalizeStore(value: unknown): Store | null {
     lastBackupAt: typeof parsed.lastBackupAt === "string" ? parsed.lastBackupAt : undefined,
     customPointTypes: normalizeCustomPointTypes(parsed.customPointTypes),
     companyLogo: normalizeCompanyLogo(parsed.companyLogo),
+    hiddenPointTypes: Array.isArray(parsed.hiddenPointTypes) ? parsed.hiddenPointTypes.filter((code): code is string => typeof code === "string") : [],
+    hiddenFields: Array.isArray(parsed.hiddenFields) ? parsed.hiddenFields.filter((key): key is HideableField => (HIDEABLE_FIELDS as readonly string[]).includes(key)) : [],
   };
 }
 
@@ -609,6 +616,7 @@ const PrintProtocol = memo(function PrintProtocol({ protocol }: { protocol: Prot
   const pages = buildPrintPages(protocol, language);
   const pageMetadata = buildPageMetadata(protocol, pages);
   const legendEntries = protocolLegendEntries(protocol, language);
+  const hiddenPrint = new Set(protocol.hiddenFields ?? []);
 
   return (
     <div className="print-root" aria-hidden="true">
@@ -618,14 +626,14 @@ const PrintProtocol = memo(function PrintProtocol({ protocol }: { protocol: Prot
             <h1>{t("appTitle")}</h1>
             <PrintMetaField className="print-project" label={t("project") + ":"} value={protocol.meta.project} />
             <PrintMetaField className="print-date" label={t("date") + ":"} value={formatDate(protocol.meta.date, language)} />
-            <PrintMetaField className="print-instrument" label={t("instrument") + ":"} value={protocol.meta.instrument} />
-            <PrintMetaField className="print-fp-status" label={t("fpStatus") + ":"} value={protocol.meta.fpSynced} />
-            <PrintMetaField className="print-project-number" label={t("projectNumber") + ":"} value={protocol.meta.projectNumber} />
-            <PrintMetaField className="print-time" label={t("time") + ":"} value={pageMetadata[pageIndex].meta.startTime} />
-            <PrintMetaField className="print-crew" label={t("crew")} value={protocol.meta.crew} />
-            <PrintMetaField className="print-fp-file" label={t("fpFile") + ":"} value={protocol.meta.fpFile} />
-            <PrintMetaField className="print-temperature" label={t("temperature") + ":"} value={pageMetadata[pageIndex].meta.temperature ? `${pageMetadata[pageIndex].meta.temperature} °C` : ""} />
-            <PrintMetaField className="print-pressure" label={t("pressure") + ":"} value={pageMetadata[pageIndex].meta.pressure ? `${pageMetadata[pageIndex].meta.pressure} hPa` : ""} />
+            {!hiddenPrint.has("instrument") ? <PrintMetaField className="print-instrument" label={t("instrument") + ":"} value={protocol.meta.instrument} /> : null}
+            {!hiddenPrint.has("fpSynced") ? <PrintMetaField className="print-fp-status" label={t("fpStatus") + ":"} value={protocol.meta.fpSynced} /> : null}
+            {!hiddenPrint.has("projectNumber") ? <PrintMetaField className="print-project-number" label={t("projectNumber") + ":"} value={protocol.meta.projectNumber} /> : null}
+            {!hiddenPrint.has("startTime") ? <PrintMetaField className="print-time" label={t("time") + ":"} value={pageMetadata[pageIndex].meta.startTime} /> : null}
+            {!hiddenPrint.has("crew") ? <PrintMetaField className="print-crew" label={t("crew")} value={protocol.meta.crew} /> : null}
+            {!hiddenPrint.has("fpFile") ? <PrintMetaField className="print-fp-file" label={t("fpFile") + ":"} value={protocol.meta.fpFile} /> : null}
+            {!hiddenPrint.has("temperature") ? <PrintMetaField className="print-temperature" label={t("temperature") + ":"} value={pageMetadata[pageIndex].meta.temperature ? `${pageMetadata[pageIndex].meta.temperature} °C` : ""} /> : null}
+            {!hiddenPrint.has("pressure") ? <PrintMetaField className="print-pressure" label={t("pressure") + ":"} value={pageMetadata[pageIndex].meta.pressure ? `${pageMetadata[pageIndex].meta.pressure} hPa` : ""} /> : null}
             {protocol.meta.showCompanyLogo && protocol.companyLogo ? (
               <div className="print-brand print-brand-custom">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -685,6 +693,7 @@ function HomeContent() {
   const [systemDark, setSystemDark] = useState(true);
   const uiTheme: UiTheme = themeChoice === "auto" ? (systemDark ? "dark" : "light") : themeChoice;
   const [menuOpen, setMenuOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [targetSheet, setTargetSheet] = useState<TargetSheet | null>(null);
   const [targetForm, setTargetForm] = useState<TargetForm>(DEFAULT_TARGET_FORM);
   const [customRemarkMode, setCustomRemarkMode] = useState(false);
@@ -822,19 +831,27 @@ function HomeContent() {
     return [...REMARK_CHOICES, ...previous, { value: CUSTOM_REMARK, label: t("other"), detail: t("enterRemark") }];
   }, [store.savedCombinations, REMARK_CHOICES, t]);
   const customPointTypes = useMemo(() => store.customPointTypes ?? [], [store.customPointTypes]);
+  const hiddenPointTypes = useMemo(() => new Set(store.hiddenPointTypes ?? []), [store.hiddenPointTypes]);
+  const hiddenFields = useMemo(() => new Set<string>(store.hiddenFields ?? []), [store.hiddenFields]);
+  const showField = (key: HideableField) => !hiddenFields.has(key);
   const savedPointTypeOptions = useMemo<Choice[]>(() => {
     const standard = new Set<string>(POINT_TYPE_CHOICES.map((option) => option.value));
-    return [...POINT_TYPE_CHOICES, ...customPointTypes.filter((item) => !standard.has(item.code))
+    return [...POINT_TYPE_CHOICES.filter((option) => !hiddenPointTypes.has(option.value)), ...customPointTypes.filter((item) => !standard.has(item.code))
       .map((item) => ({ value: item.code, label: item.code, detail: item.detail || t("customPointType") }))];
-  }, [POINT_TYPE_CHOICES, customPointTypes, t]);
+  }, [POINT_TYPE_CHOICES, hiddenPointTypes, customPointTypes, t]);
+  /** Standard (even if hidden) or own type: anything else is entered as a new own type. */
+  const knownPointType = (code: string) => POINT_TYPE_CHOICES.some((option) => option.value === code) || customPointTypes.some((item) => item.code === code);
+  /** Keeps a hidden standard type visible in a picker when it is the current value. */
+  const withCurrentType = (options: Choice[], value: string) => !value || options.some((option) => option.value === value)
+    ? options : [...POINT_TYPE_CHOICES.filter((option) => option.value === value), ...options];
   const pointTypeOptions = useMemo<Choice[]>(() => [...savedPointTypeOptions,
     { value: CUSTOM_POINT_TYPE, label: t("customPointType"), detail: t("enterPointType") }], [savedPointTypeOptions, t]);
   const recentCombinations = useMemo(() => [...store.savedCombinations]
     .sort((a, b) => b.lastUsedAt.localeCompare(a.lastUsedAt)).slice(0, 12), [store.savedCombinations]);
   const pdfSheets = useMemo(() => pdfActionsOpen && activeProtocol ? buildPageMetadata(activeProtocol) : [], [pdfActionsOpen, activeProtocol]);
   // App-wide settings (own logo, own point types) travel with the protocol into print and PDF.
-  const brandedProtocol = useMemo<Protocol>(() => ({ ...activeProtocol, customPointTypes, companyLogo: store.companyLogo }),
-    [activeProtocol, customPointTypes, store.companyLogo]);
+  const brandedProtocol = useMemo<Protocol>(() => ({ ...activeProtocol, customPointTypes, companyLogo: store.companyLogo, hiddenFields: store.hiddenFields ?? [] }),
+    [activeProtocol, customPointTypes, store.companyLogo, store.hiddenFields]);
   const printableProtocol = useDeferredValue(brandedProtocol);
   const backupNeeded = useMemo(() => {
     if (!hasMeaningfulData(store)) return false;
@@ -949,7 +966,7 @@ function HomeContent() {
 
   function openEditTarget(stationId: string, target: Target) {
     setCustomRemarkMode(Boolean(target.remark && !remarkOptions.some((option) => option.value === target.remark)));
-    setCustomPointTypeMode(Boolean(target.pointType && !savedPointTypeOptions.some((option) => option.value === target.pointType)));
+    setCustomPointTypeMode(Boolean(target.pointType && !knownPointType(target.pointType)));
     setCustomPointTypeDetail("");
     setTargetForm({
       point: target.point, height: target.height, remark: target.remark, pointType: target.pointType,
@@ -971,7 +988,7 @@ function HomeContent() {
       isConnectionPoint: match?.isConnectionPoint ?? form.isConnectionPoint,
     }));
     if (match?.remark) setCustomRemarkMode(!remarkOptions.some((option) => option.value === match.remark));
-    if (match?.pointType) setCustomPointTypeMode(!savedPointTypeOptions.some((option) => option.value === match.pointType));
+    if (match?.pointType) setCustomPointTypeMode(!knownPointType(match.pointType));
   }
 
   function selectPointType(pointType: string) {
@@ -1147,15 +1164,15 @@ function HomeContent() {
           </summary>
           <div className="form-grid">
             <Field label={t("project")} value={activeProtocol.meta.project} onChange={(value) => updateMeta("project", value)} placeholder={t("exampleProject")} />
-            <Field label={t("projectNumber")} value={activeProtocol.meta.projectNumber} onChange={(value) => updateMeta("projectNumber", value)} placeholder={t("exampleNumber")} />
+            {showField("projectNumber") ? <Field label={t("projectNumber")} value={activeProtocol.meta.projectNumber} onChange={(value) => updateMeta("projectNumber", value)} placeholder={t("exampleNumber")} /> : null}
             <LocalizedDateTimeField key={`date-${activeProtocol.id}-${language}`} label={t("date")} kind="date" value={activeProtocol.meta.date} onChange={(value) => updateMeta("date", value)} />
-            <LocalizedDateTimeField key={`time-${activeProtocol.id}-${language}`} label={t("start")} kind="time" value={activeProtocol.meta.startTime} onChange={(value) => updateMeta("startTime", value)} />
-            <Field label={t("instrument")} value={activeProtocol.meta.instrument} onChange={(value) => updateMeta("instrument", value)} placeholder={t("exampleInstrument")} />
-            <Field label={t("crew")} value={activeProtocol.meta.crew} onChange={(value) => updateMeta("crew", value)} placeholder={t("namesPlaceholder")} />
-            <Field label={t("temperature") + " [°C]"} inputMode="decimal" value={activeProtocol.meta.temperature} onChange={(value) => updateMeta("temperature", value)} />
-            <Field label={t("pressure") + " [hPa]"} inputMode="decimal" value={activeProtocol.meta.pressure} onChange={(value) => updateMeta("pressure", value)} />
-            <Field label={t("fpStatus")} value={activeProtocol.meta.fpSynced} onChange={(value) => updateMeta("fpSynced", value)} placeholder={t("statusPlaceholder")} />
-            <Field label={t("fpFile")} value={activeProtocol.meta.fpFile} onChange={(value) => updateMeta("fpFile", value)} placeholder={t("filePlaceholder")} />
+            {showField("startTime") ? <LocalizedDateTimeField key={`time-${activeProtocol.id}-${language}`} label={t("start")} kind="time" value={activeProtocol.meta.startTime} onChange={(value) => updateMeta("startTime", value)} /> : null}
+            {showField("instrument") ? <Field label={t("instrument")} value={activeProtocol.meta.instrument} onChange={(value) => updateMeta("instrument", value)} placeholder={t("exampleInstrument")} /> : null}
+            {showField("crew") ? <Field label={t("crew")} value={activeProtocol.meta.crew} onChange={(value) => updateMeta("crew", value)} placeholder={t("namesPlaceholder")} /> : null}
+            {showField("temperature") ? <Field label={t("temperature") + " [°C]"} inputMode="decimal" value={activeProtocol.meta.temperature} onChange={(value) => updateMeta("temperature", value)} /> : null}
+            {showField("pressure") ? <Field label={t("pressure") + " [hPa]"} inputMode="decimal" value={activeProtocol.meta.pressure} onChange={(value) => updateMeta("pressure", value)} /> : null}
+            {showField("fpSynced") ? <Field label={t("fpStatus")} value={activeProtocol.meta.fpSynced} onChange={(value) => updateMeta("fpSynced", value)} placeholder={t("statusPlaceholder")} /> : null}
+            {showField("fpFile") ? <Field label={t("fpFile")} value={activeProtocol.meta.fpFile} onChange={(value) => updateMeta("fpFile", value)} placeholder={t("filePlaceholder")} /> : null}
             <label className="check-field pdf-logo-field">
               <input type="checkbox" checked={activeProtocol.meta.showCompanyLogo} onChange={(event) => updateMeta("showCompanyLogo", event.target.checked)} />
               <span><b>{t("showLogo")}</b><small>{t("logoDetail")}</small></span>
@@ -1271,8 +1288,8 @@ function HomeContent() {
                 <fieldset className="page-weather-fields" key={sheet.key}>
                   <legend>{t("pageNumber", { page: index + 2, total: following.length + 1 })}{` · ${t("station")}: ${sheet.station?.point || "—"}`}</legend>
                   <LocalizedDateTimeField key={`sheet-time-${sheet.key}-${language}`} label={t("stationTime")} kind="time" value={sheet.meta.startTime} onChange={(value) => { if (sheet.station) updateStation(sheet.station.id, { startTime: value }); }} />
-                  <Field label={t("temperature") + " [°C]"} inputMode="decimal" value={sheet.meta.temperature} onChange={(value) => updateActive(protocol => ({ ...protocol, pageConditions: { ...protocol.pageConditions, [sheet.key]: { ...protocol.pageConditions?.[sheet.key], temperature: value } } }))} />
-                  <Field label={t("pressure") + " [hPa]"} inputMode="decimal" value={sheet.meta.pressure} onChange={(value) => updateActive(protocol => ({ ...protocol, pageConditions: { ...protocol.pageConditions, [sheet.key]: { ...protocol.pageConditions?.[sheet.key], pressure: value } } }))} />
+                  {showField("temperature") ? <Field label={t("temperature") + " [°C]"} inputMode="decimal" value={sheet.meta.temperature} onChange={(value) => updateActive(protocol => ({ ...protocol, pageConditions: { ...protocol.pageConditions, [sheet.key]: { ...protocol.pageConditions?.[sheet.key], temperature: value } } }))} /> : null}
+                  {showField("pressure") ? <Field label={t("pressure") + " [hPa]"} inputMode="decimal" value={sheet.meta.pressure} onChange={(value) => updateActive(protocol => ({ ...protocol, pageConditions: { ...protocol.pageConditions, [sheet.key]: { ...protocol.pageConditions?.[sheet.key], pressure: value } } }))} /> : null}
                 </fieldset>
               ))}
             </section> : null}
@@ -1302,7 +1319,7 @@ function HomeContent() {
             ) : null}
             <div className="target-form">
               <SuggestionField label={t("target")} value={targetForm.point} onChange={(point) => setTargetForm((form) => ({ ...form, point }))} onPick={pickPoint} suggestions={pointSuggestions} placeholder={t("pointPlaceholder")} />
-              <SelectField label={t("pointType")} value={customPointTypeMode ? CUSTOM_POINT_TYPE : targetForm.pointType} onChange={selectPointType} options={pointTypeOptions} placeholder={t("noPointType")} />
+              <SelectField label={t("pointType")} value={customPointTypeMode ? CUSTOM_POINT_TYPE : targetForm.pointType} onChange={selectPointType} options={withCurrentType(pointTypeOptions, targetForm.pointType)} placeholder={t("noPointType")} />
               {customPointTypeMode ? (
                 <>
                   <Field label={t("pointTypeCode")} value={targetForm.pointType} onChange={(pointType) => setTargetForm((form) => ({ ...form, pointType: pointType.slice(0, 12) }))} placeholder={t("pointTypeCodePlaceholder")} />
@@ -1408,21 +1425,10 @@ function HomeContent() {
         <Modal title={t("valueDirectory")} onClose={() => { setValuesOpen(false); setValueEdit(null); }} wide>
           <div className="modal-scroll values-browser">
             <p className="helper-text">{t("valueHint")}</p>
-            {!valueEdit && customPointTypes.length ? (
-              <div className="custom-point-types">
-                <h3>{t("customPointTypes")}</h3>
-                {customPointTypes.map((item) => (
-                  <div className="custom-point-type" key={item.code}>
-                    <span><b>{item.code}</b>{item.detail ? <small>{item.detail}</small> : null}</span>
-                    <button type="button" className="quiet-button" aria-label={`${t("deleteCustomPointType")}: ${item.code}`} onClick={() => removeCustomPointType(item.code)}>×</button>
-                  </div>
-                ))}
-              </div>
-            ) : null}
             {valueEdit ? (
               <div className="value-editor">
                 <Field label={t("target")} value={valueEdit.point} onChange={(point) => setValueEdit({ ...valueEdit, point })} />
-                <SelectField label={t("pointType")} value={valueEdit.pointType} onChange={(pointType) => setValueEdit({ ...valueEdit, pointType })} options={savedPointTypeOptions} placeholder={t("noPointType")} />
+                <SelectField label={t("pointType")} value={valueEdit.pointType} onChange={(pointType) => setValueEdit({ ...valueEdit, pointType })} options={withCurrentType(savedPointTypeOptions, valueEdit.pointType)} placeholder={t("noPointType")} />
                 <Field label={t("targetHeightUnit")} inputMode="decimal" value={valueEdit.height} onChange={(height) => setValueEdit({ ...valueEdit, height })} />
                 <label className="check-field rb-check-field">
                   <input type="checkbox" checked={valueEdit.isBacksight} onChange={(event) => setValueEdit({ ...valueEdit, isBacksight: event.target.checked, isConnectionPoint: event.target.checked ? false : valueEdit.isConnectionPoint })} />
@@ -1504,6 +1510,11 @@ function HomeContent() {
                 <span className="menu-copy"><b>{t("help")}</b></span>
                 <span className="menu-chevron" aria-hidden="true">›</span>
               </button>
+              <button type="button" className="menu-row" onClick={() => { setMenuOpen(false); setSettingsOpen(true); }}>
+                <span className="menu-icon green" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 17h4M12 17h8" /><circle cx="16" cy="7" r="2" /><circle cx="10" cy="17" r="2" /></svg></span>
+                <span className="menu-copy"><b>{t("settings")}</b></span>
+                <span className="menu-chevron" aria-hidden="true">›</span>
+              </button>
             </div>
             <div className="menu-theme">
               <b id="menu-theme-label">{t("theme")}</b>
@@ -1517,6 +1528,55 @@ function HomeContent() {
               </div>
             </div>
           </div>
+        </Modal>
+      ) : null}
+
+      {settingsOpen ? (
+        <Modal title={t("settings")} onClose={() => setSettingsOpen(false)} wide>
+          <div className="modal-scroll settings-sheet">
+            <section>
+              <h3>{t("projectFields")}</h3>
+              <p className="helper-text">{t("projectFieldsHint")}</p>
+              <div className="settings-list">
+                {HIDEABLE_FIELDS.map((key) => (
+                  <label className="settings-row" key={key}>
+                    <span><b>{t(FIELD_LABELS[key])}</b></span>
+                    <input type="checkbox" className="switch" checked={showField(key)}
+                      onChange={(event) => setStore((current) => ({ ...current, hiddenFields: event.target.checked
+                        ? (current.hiddenFields ?? []).filter((item) => item !== key) : [...(current.hiddenFields ?? []), key] }))} />
+                  </label>
+                ))}
+              </div>
+            </section>
+            <section>
+              <h3>{t("standardPointTypes")}</h3>
+              <p className="helper-text">{t("standardPointTypesHint")}</p>
+              <div className="settings-list">
+                {POINT_TYPE_CHOICES.map((choice) => (
+                  <label className="settings-row" key={choice.value}>
+                    <span><b>{choice.label}</b><small>{choice.detail}</small></span>
+                    <input type="checkbox" className="switch" checked={!hiddenPointTypes.has(choice.value)}
+                      onChange={(event) => setStore((current) => ({ ...current, hiddenPointTypes: event.target.checked
+                        ? (current.hiddenPointTypes ?? []).filter((code) => code !== choice.value) : [...(current.hiddenPointTypes ?? []), choice.value] }))} />
+                  </label>
+                ))}
+              </div>
+            </section>
+            <section>
+              <h3>{t("customPointTypes")}</h3>
+              {customPointTypes.length ? (
+                <div className="settings-list">
+                  {customPointTypes.map((item) => (
+                    <div className="settings-row" key={item.code}>
+                      <span><b>{item.code}</b>{item.detail ? <small>{item.detail}</small> : null}</span>
+                      <button type="button" className="quiet-button" aria-label={`${t("deleteCustomPointType")}: ${item.code}`} onClick={() => removeCustomPointType(item.code)}>{t("remove")}</button>
+                    </div>
+                  ))}
+                </div>
+              ) : <p className="helper-text">{t("noCustomPointTypes")}</p>}
+            </section>
+          </div>
+          <div className="modal-actions single"><button type="button" className="primary-button" onClick={() => setSettingsOpen(false)}>{t("close")}</button></div>
         </Modal>
       ) : null}
 

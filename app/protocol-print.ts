@@ -19,7 +19,10 @@ export type CustomPointType = { code: string; detail: string };
 /** User-supplied company logo (PNG data URI, pixel size) with an optional caption. */
 export type CompanyLogo = { dataUri: string; width: number; height: number; caption: string };
 // customPointTypes / companyLogo are app-wide settings attached only when rendering a protocol.
-export type Protocol = { customPointTypes?: CustomPointType[]; companyLogo?: CompanyLogo; id: string; createdAt: string; updatedAt: string; meta: ProtocolMeta; stations: Station[]; pageConditions?: Record<string, { temperature?: string; pressure?: string }> };
+/** Optional header fields a user can switch off (project name and date always stay). */
+export const HIDEABLE_FIELDS = ["projectNumber", "startTime", "instrument", "crew", "temperature", "pressure", "fpSynced", "fpFile"] as const;
+export type HideableField = (typeof HIDEABLE_FIELDS)[number];
+export type Protocol = { customPointTypes?: CustomPointType[]; companyLogo?: CompanyLogo; hiddenFields?: readonly string[]; id: string; createdAt: string; updatedAt: string; meta: ProtocolMeta; stations: Station[]; pageConditions?: Record<string, { temperature?: string; pressure?: string }> };
 
 export function formatProtocolHeight(value: string, language: Language) {
   const trimmed = value.trim();
