@@ -42,7 +42,7 @@ const GUIDE = [
   ],
 ] as const;
 
-export function InstructionGuide(){
+export function InstructionGuide({children}:{children?:React.ReactNode}){
   const {language,t}=useLanguage();
   const column=LANGUAGES.indexOf(language);
   const pointTypes=pointTypeChoices(language);
@@ -56,5 +56,6 @@ export function InstructionGuide(){
         {prisms.map(prism=><div key={prism.value}><dt>{prismAbbreviation(prism.value,language)}</dt><dd>{prism.name} · {prism.detail}</dd></div>)}
       </dl>
     </article>
+    {children}
   </div>;
 }

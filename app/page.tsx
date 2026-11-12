@@ -32,10 +32,12 @@ type TargetForm = {
 };
 type Choice = { value: string; label: string; detail?: string };
 type UiTheme = "dark" | "light";
+type ThemeChoice = UiTheme | "auto";
 
 const CUSTOM_REMARK = "__custom__";
 const CUSTOM_POINT_TYPE = "__custom_point_type__";
 const LOGO_MAX_PX = 900;
+const APP_VERSION = "1.2.0";
 
 function normalizeCustomPointTypes(value: unknown): CustomPointType[] {
   if (!Array.isArray(value)) return [];
@@ -679,9 +681,10 @@ function HomeContent() {
   const POINT_TYPE_CHOICES = useMemo(() => pointTypeChoices(language), [language]);
   const [store, setStore] = useState<Store>(() => createInitialStore());
   const [hydrated, setHydrated] = useState(false);
-  const [online, setOnline] = useState(true);
-  const [uiTheme, setUiTheme] = useState<UiTheme>("dark");
-  const [offlineReady, setOfflineReady] = useState(false);
+  const [themeChoice, setThemeChoice] = useState<ThemeChoice>("auto");
+  const [systemDark, setSystemDark] = useState(true);
+  const uiTheme: UiTheme = themeChoice === "auto" ? (systemDark ? "dark" : "light") : themeChoice;
+  const [menuOpen, setMenuOpen] = useState(false);
   const [targetSheet, setTargetSheet] = useState<TargetSheet | null>(null);
   const [targetForm, setTargetForm] = useState<TargetForm>(DEFAULT_TARGET_FORM);
   const [customRemarkMode, setCustomRemarkMode] = useState(false);
@@ -691,8 +694,6 @@ function HomeContent() {
   const logoInputRef = useRef<HTMLInputElement>(null);
   const [protocolsOpen, setProtocolsOpen] = useState(false);
   const [valuesOpen, setValuesOpen] = useState(false);
-  const [installHint, setInstallHint] = useState(false);
-  const [aboutOpen, setAboutOpen] = useState(false);
   const [instructionOpen, setInstructionOpen] = useState(false);
   const [backupOpen, setBackupOpen] = useState(false);
   const [snapshots, setSnapshots] = useState<StoreSnapshot[]>([]);
@@ -708,16 +709,23 @@ function HomeContent() {
     let active = true;
     void loadPdfFonts().catch(() => undefined);
     void loadProtocolPdf().catch(() => undefined);
-    let initialTheme: UiTheme = "dark";
+    let initialChoice: ThemeChoice = "auto";
     try {
-      initialTheme = localStorage.getItem(UI_THEME_KEY) === "light" ? "light" : "dark";
+      const stored = localStorage.getItem(UI_THEME_KEY);
+      if (stored === "light" || stored === "dark") initialChoice = stored;
     } catch {
-      // The default dark theme remains available if storage is restricted.
+      // "Auto" (follow the phone) remains available if storage is restricted.
     }
+    const darkQuery = window.matchMedia("(prefers-color-scheme: dark)");
+    const initialTheme: UiTheme = initialChoice === "auto" ? (darkQuery.matches ? "dark" : "light") : initialChoice;
     document.documentElement.dataset.theme = initialTheme;
     const themeFrame = window.requestAnimationFrame(() => {
-      if (active) setUiTheme(initialTheme);
+      if (!active) return;
+      setThemeChoice(initialChoice);
+      setSystemDark(darkQuery.matches);
     });
+    const followSystemTheme = (event: MediaQueryListEvent) => setSystemDark(event.matches);
+    darkQuery.addEventListener("change", followSystemTheme);
     const installUrl = new URL(window.location.href);
     if (installUrl.searchParams.get("install") !== "v22") {
       installUrl.searchParams.set("install", "v22");
@@ -741,39 +749,35 @@ function HomeContent() {
       }
       if (!active) return;
       if (restored) setStore(restored);
-      setOnline(navigator.onLine);
       setHydrated(true);
       void navigator.storage?.persist?.().catch(() => false);
     })();
-    const updateOnline = () => setOnline(navigator.onLine);
-    window.addEventListener("online", updateOnline);
-    window.addEventListener("offline", updateOnline);
     if ("serviceWorker" in navigator) {
       navigator.serviceWorker.register(assetUrl("/sw.js")).then(async () => {
         const registration = await navigator.serviceWorker.ready;
-        setOfflineReady(true);
         const urls = performance.getEntriesByType("resource").map((entry) => entry.name)
           .filter((url) => url.startsWith(location.origin));
         registration.active?.postMessage({ type: "CACHE_URLS", urls });
-      }).catch(() => setOfflineReady(false));
+      }).catch(() => undefined);
     }
     return () => {
       active = false;
       window.cancelAnimationFrame(themeFrame);
-      window.removeEventListener("online", updateOnline);
-      window.removeEventListener("offline", updateOnline);
+      darkQuery.removeEventListener("change", followSystemTheme);
     };
   }, []);
 
   useEffect(() => {
     if (!hydrated) return;
     document.documentElement.dataset.theme = uiTheme;
+    document.querySelector('meta[name="theme-color"]')?.setAttribute("content", uiTheme === "dark" ? "#0b100e" : "#f4f7f5");
     try {
-      localStorage.setItem(UI_THEME_KEY, uiTheme);
+      if (themeChoice === "auto") localStorage.removeItem(UI_THEME_KEY);
+      else localStorage.setItem(UI_THEME_KEY, themeChoice);
     } catch {
       // Theme switching still works for the current session.
     }
-  }, [hydrated, uiTheme]);
+  }, [hydrated, uiTheme, themeChoice]);
 
   useEffect(() => {
     if (!hydrated) return;
@@ -1117,50 +1121,18 @@ function HomeContent() {
       <main className="app-shell">
         <header className="topbar">
           <div className="brand-row">
-            <button type="button" className="brand-button" onClick={() => setAboutOpen(true)} aria-label={t("aboutAria")}>
-              <span className="brand-mark" aria-hidden="true" />
-            </button>
+            <span className="brand-mark" aria-hidden="true" />
             <div><p className="eyebrow">{t("fieldLog")}</p><h1>{t("appTitle")}</h1></div>
           </div>
-          <div className="status-row">
+          <div className="topbar-actions">
             <LanguageSwitcher />
-            <span className={`status-dot ${online ? "online" : "offline"}`} />
-            <span className="connection-status">{online ? (offlineReady ? t("offlineReady") : t("offlinePreparing")) : t("offline")}</span>
-            <button type="button" className="theme-toggle"
-              aria-label={uiTheme === "dark" ? t("enableLight") : t("enableDark")}
-              title={uiTheme === "dark" ? t("light") : t("dark")}
-              onClick={() => setUiTheme((theme) => theme === "dark" ? "light" : "dark")}>
-              {uiTheme === "dark" ? (
-                <svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.5" /><path d="M12 2v2M12 20v2M4.93 4.93l1.42 1.42M17.65 17.65l1.42 1.42M2 12h2M20 12h2M4.93 19.07l1.42-1.42M17.65 6.35l1.42-1.42" /></svg>
-              ) : (
-                <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M20 15.4A8.5 8.5 0 0 1 8.6 4a8.5 8.5 0 1 0 11.4 11.4Z" /></svg>
-              )}
-            </button>
-          </div>
-          <div className="header-actions">
-            <button type="button" className="quiet-button" onClick={() => setValuesOpen(true)}>{t("values")}</button>
-            <button type="button" className="quiet-button" onClick={() => setProtocolsOpen(true)}>
-              {t("protocols")} <span className="count-badge">{store.protocols.length}</span>
-            </button>
-            <button type="button" className="primary-small" onClick={startNewProtocol}>{t("new")}</button>
-          </div>
+            <button type="button" className="menu-button" onClick={() => setMenuOpen(true)}
+            aria-label={backupNeeded ? `${t("menu")}: ${t("backupNeededBadge")}` : t("menu")} aria-haspopup="dialog">
+            <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h10" /></svg>
+            {backupNeeded ? <span className="menu-dot" /> : null}
+          </button>
+        </div>
         </header>
-
-        {!offlineReady && online ? (
-          <button type="button" className="install-card" onClick={() => setInstallHint(true)}>
-            <span className="install-icon">↓</span>
-            <span><b>{t("offlineSetup")}</b><small>{t("homeScreen")}</small></span>
-            <span>›</span>
-          </button>
-        ) : null}
-
-        {backupNeeded ? (
-          <button type="button" className="backup-reminder" onClick={openBackupCenter}>
-            <span className="backup-reminder-icon">↥</span>
-            <span><b>{t("backupReminder")}</b><small>{t("backupReminderDetail")}</small></span>
-            <span>›</span>
-          </button>
-        ) : null}
 
         <section className="protocol-hero">
           <div><p className="eyebrow">{t("currentProtocol")}</p><h2>{protocolLabel(activeProtocol, language)}</h2>
@@ -1486,31 +1458,65 @@ function HomeContent() {
         </Modal>
       ) : null}
 
-      {installHint ? (
-        <Modal title={t("offlineIphone")} onClose={() => setInstallHint(false)}>
-          <div className="install-steps">
-            {(["iphone1", "iphone2", "iphone3", "offlineInstall"] as const).map((key,index) => <div key={key}><span>{index+1}</span><p>{t(key)}</p></div>)}
-          </div>
-          <div className="modal-actions single"><button type="button" className="primary-button" onClick={() => setInstallHint(false)}>{t("understood")}</button></div>
-        </Modal>
-      ) : null}
 
-      {aboutOpen ? (
-        <Modal title={t("about")} onClose={() => setAboutOpen(false)}>
-          <div className="modal-scroll about-app">
-            <div className="about-brand"><span className="brand-mark" aria-hidden="true" /><div><h3>{t("appTitle")}</h3><p>{t("version", {version: "1.1.0"})}</p></div></div>
-            <section><h4>1. {t("about")}</h4><p>{t("author")}</p><p className="copyright">{t("copyright")}</p><p>{t("usageTerms")}</p><p>{t("restrictions")}</p></section>
-            <section className="about-action-section"><h4>2. {t("instructions")}</h4><p>{t("instructionIntro")}</p><button type="button" className="primary-button" onClick={() => { setAboutOpen(false); setInstructionOpen(true); }}>{t("openInstructions")}</button></section>
-            <section><h4>3. {t("install")}</h4><p><b>iPhone:</b> {t("iphoneInstall")}</p><p><b>Android:</b> {t("androidInstall")}</p><p>{t("offlineInstall")}</p></section>
-          </div>
-          <div className="modal-actions single"><button type="button" className="primary-button" onClick={() => setAboutOpen(false)}>{t("close")}</button></div>
-        </Modal>
-      ) : null}
 
       {instructionOpen ? (
-        <Modal title={t("instructions")} onClose={() => setInstructionOpen(false)} full>
-          <InstructionGuide />
-          <div className="modal-actions single"><button type="button" className="primary-button" onClick={() => setInstructionOpen(false)}>{t("closeInstructions")}</button></div>
+        <Modal title={t("help")} onClose={() => setInstructionOpen(false)} full>
+          <InstructionGuide>
+            <section className="about-app help-about">
+              <div className="about-brand"><span className="brand-mark" aria-hidden="true" /><div><h3>{t("appTitle")}</h3><p>{t("version", {version: APP_VERSION})}</p></div></div>
+              <section><h4>{t("about")}</h4><p>{t("author")}</p><p className="copyright">{t("copyright")}</p><p>{t("usageTerms")}</p><p>{t("restrictions")}</p></section>
+              <section><h4>{t("install")}</h4><p><b>iPhone:</b> {t("iphoneInstall")}</p><p><b>Android:</b> {t("androidInstall")}</p><p>{t("offlineInstall")}</p></section>
+            </section>
+          </InstructionGuide>
+          <div className="modal-actions single"><button type="button" className="primary-button" onClick={() => setInstructionOpen(false)}>{t("close")}</button></div>
+        </Modal>
+      ) : null}
+
+      {menuOpen ? (
+        <Modal title={t("menu")} onClose={() => setMenuOpen(false)}>
+          <div className="modal-scroll app-menu">
+            <button type="button" className="primary-button menu-new" onClick={() => { setMenuOpen(false); startNewProtocol(); }}>
+              <span aria-hidden="true">+</span>{t("newProtocol")}
+            </button>
+            <div className="menu-group">
+              <button type="button" className="menu-row" onClick={() => { setMenuOpen(false); setProtocolsOpen(true); }}>
+                <span className="menu-icon green" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M7 3h8l4 4v14H7z" /><path d="M15 3v4h4M10 12h6M10 16h6" /></svg></span>
+                <span className="menu-copy"><b>{t("protocols")}</b></span>
+                <span className="count-badge">{store.protocols.length}</span><span className="menu-chevron" aria-hidden="true">›</span>
+              </button>
+              <button type="button" className="menu-row" onClick={() => { setMenuOpen(false); setValuesOpen(true); }}>
+                <span className="menu-icon blue" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 4h11a3 3 0 0 1 3 3v13H8a3 3 0 0 1-3-3z" /><path d="M5 17a3 3 0 0 1 3-3h11" /></svg></span>
+                <span className="menu-copy"><b>{t("values")}</b></span>
+                <span className="menu-chevron" aria-hidden="true">›</span>
+              </button>
+              <button type="button" className="menu-row" onClick={() => { setMenuOpen(false); openBackupCenter(); }}>
+                <span className="menu-icon orange" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M7 18h10a4 4 0 0 0 .5-8A6 6 0 0 0 6 11a3.5 3.5 0 0 0 1 7z" /><path d="M12 16v-5M9.5 13.5 12 11l2.5 2.5" /></svg></span>
+                <span className="menu-copy"><b>{t("backupMenu")}</b>
+                  <small>{t("lastBackup")}: {formatBackupDate(store.lastBackupAt, language)}</small></span>
+                {backupNeeded ? <span className="menu-warning">{t("backupNeededBadge")}</span> : null}
+                <span className="menu-chevron" aria-hidden="true">›</span>
+              </button>
+            </div>
+            <div className="menu-group">
+              <button type="button" className="menu-row" onClick={() => { setMenuOpen(false); setInstructionOpen(true); }}>
+                <span className="menu-icon blue" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" /><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .9-1 1.6V14M12 17.5v.01" /></svg></span>
+                <span className="menu-copy"><b>{t("help")}</b></span>
+                <span className="menu-chevron" aria-hidden="true">›</span>
+              </button>
+            </div>
+            <div className="menu-theme">
+              <b id="menu-theme-label">{t("theme")}</b>
+              <div className="theme-segments" role="radiogroup" aria-labelledby="menu-theme-label">
+                {(["dark", "light", "auto"] as const).map((choice) => (
+                  <button type="button" role="radio" aria-checked={themeChoice === choice} key={choice}
+                    className={themeChoice === choice ? "on" : ""} onClick={() => setThemeChoice(choice)}>
+                    {t(choice === "dark" ? "themeDark" : choice === "light" ? "themeLight" : "themeAuto")}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
         </Modal>
       ) : null}
 

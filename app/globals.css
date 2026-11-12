@@ -685,3 +685,35 @@ details[open] > summary .chevron { transform: rotate(180deg); }
   .print-logo-custom { display: block; max-width: 42mm; height: 9.29mm; object-fit: contain; object-position: right center; }
   .print-brand-custom span { width: auto; max-width: 42mm; }
 }
+
+/* Header with a single menu button + bottom-sheet menu (iOS copy) */
+.topbar, .app-shell .topbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.topbar .brand-row { flex: 1; min-width: 0; }
+.menu-button { position: relative; flex: none; width: 46px; height: 46px; display: grid; place-items: center; border: 1px solid var(--line); border-radius: 14px; color: var(--ink); background: var(--surface); box-shadow: var(--card-shadow); }
+.menu-button svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
+.menu-button:active { transform: scale(0.96); }
+.menu-dot { position: absolute; top: -3px; right: -3px; width: 13px; height: 13px; border-radius: 50%; background: var(--signal); border: 2px solid var(--canvas); }
+.app-menu { display: grid; gap: 14px; padding-bottom: 6px; }
+.menu-new { width: 100%; min-height: 54px; display: flex; align-items: center; justify-content: center; gap: 10px; font-size: 17px; }
+.menu-new span { font-size: 24px; line-height: 1; font-weight: 600; }
+.menu-group { overflow: hidden; border: 1px solid var(--line); border-radius: 18px; background: var(--surface-soft); }
+.menu-row { width: 100%; min-height: 62px; display: flex; align-items: center; gap: 13px; padding: 11px 14px; border: 0; border-bottom: 1px solid var(--line); background: transparent; color: var(--ink); text-align: left; font: inherit; }
+.menu-row:last-child { border-bottom: 0; }
+.menu-row:active { background: var(--surface); }
+.menu-icon { flex: none; width: 40px; height: 40px; display: grid; place-items: center; border-radius: 12px; }
+.menu-icon svg { width: 21px; height: 21px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
+.menu-icon.green { color: var(--green); background: var(--primary-soft); }
+.menu-icon.orange { color: var(--signal); background: var(--signal-soft); }
+.menu-icon.blue { color: #86a9ff; background: rgba(110, 160, 255, 0.14); }
+:root[data-theme="light"] .menu-icon.blue { color: #3d68d8; background: rgba(61, 104, 216, 0.11); }
+.menu-copy { flex: 1; min-width: 0; }
+.menu-copy b { display: block; font-size: 15px; }
+.menu-copy small { display: block; margin-top: 2px; color: var(--muted); font-size: 12px; line-height: 1.35; }
+.menu-warning { flex: none; padding: 4px 9px; border: 1px solid var(--signal-line); border-radius: 10px; color: var(--signal); background: var(--signal-soft); font-size: 11px; font-weight: 800; }
+.menu-chevron { flex: none; color: var(--muted); font-size: 20px; }
+.menu-theme { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 18px; background: var(--surface-soft); }
+.menu-theme b { font-size: 15px; }
+.theme-segments { display: flex; padding: 3px; border: 1px solid var(--line); border-radius: 12px; background: var(--canvas); }
+.theme-segments button { min-height: 36px; padding: 0 12px; border: 0; border-radius: 9px; background: transparent; color: var(--muted); font: inherit; font-size: 13px; font-weight: 750; }
+.theme-segments button.on { color: var(--ink); background: var(--surface); box-shadow: 0 2px 8px rgba(0, 0, 0, 0.22); }
+.help-about { margin-top: 8px; }
