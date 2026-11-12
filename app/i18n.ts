@@ -39,7 +39,6 @@ export const MESSAGES = {
   themeAuto: ["Auto", "Auto", "Auto", "Auto", "Авто"],
   backupMenu: ["Datensicherung", "Backup", "Copia de seguridad", "Backup", "Резервна копія"],
   backupNeededBadge: ["Fällig", "Needed", "Pendiente", "Necessario", "Потрібна"],
-  iCloudOn: ["iCloud aktiv", "iCloud on", "iCloud activo", "iCloud attivo", "iCloud увімкнено"],
   values: ["Werte", "Saved values", "Valores", "Valori", "Довідник"],
   protocols: ["Protokolle", "Records", "Registros", "Registri", "Протоколи"],
   protocol: ["Protokoll", "Record", "Registro", "Registro", "Протокол"],

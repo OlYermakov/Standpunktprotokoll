@@ -41,7 +41,7 @@ test("PDF shows the own logo caption instead of the default AIT caption",async()
 
 test("hidden header fields are left out of the PDF and the rest moves up",async()=>{
   const filled={...protocol,companyLogo:undefined,meta:{...protocol.meta,projectNumber:"NR-77",instrument:"TS16",crew:"Team A",fpSynced:"OK-FP",fpFile:"net.gsi",temperature:"12",pressure:"990"}};
-  const render=async(hiddenFields,name)=>{const doc=buildProtocolPdf({...filled,hiddenFields},"de",fonts);const path=new URL(name,output).pathname;await writeFile(path,Buffer.from(doc.output("arraybuffer")));return execFileSync("pdftotext",["-layout",path,"-"],{encoding:"utf8"});};
+  const render=async(hiddenFields,name)=>{const doc=buildProtocolPdf({...filled,hiddenFields},undefined,"de",fonts);const path=new URL(name,output).pathname;await writeFile(path,Buffer.from(doc.output("arraybuffer")));return execFileSync("pdftotext",["-layout",path,"-"],{encoding:"utf8"});};
   const all=await render([],"fields-all.pdf");
   for(const value of ["NR-77","TS16","Team A","OK-FP","net.gsi","12 °C","990 hPa"]) assert.ok(all.includes(value),value);
   const some=await render(["fpSynced","fpFile","pressure","instrument"],"fields-some.pdf");

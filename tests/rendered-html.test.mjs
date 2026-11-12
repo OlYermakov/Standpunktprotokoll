@@ -47,7 +47,8 @@ test("field UI has a persistent daylight mode and safe action colors", async () 
 
   assert.match(source, /UI_THEME_KEY = "standpunktprotokoll-ui-theme"/);
   assert.match(source, /document\.documentElement\.dataset\.theme = uiTheme/);
-  assert.match(source, /className="theme-toggle"/);
+  assert.match(source, /className="theme-segments"/);
+  assert.match(source, /prefers-color-scheme: dark/);
   assert.ok(source.includes("lang={LOCALES[language]}"));
   assert.match(source, /function LocalizedDateTimeField/);
   assert.ok(source.includes('kind === "date" ? t("datePlaceholder") : t("timePlaceholder")'));
