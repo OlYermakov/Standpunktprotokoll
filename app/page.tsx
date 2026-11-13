@@ -134,6 +134,7 @@ const SNAPSHOT_STORE = "snapshots";
 const STORE_RECORD_KEY = "current-store";
 const MAX_SNAPSHOTS = 12;
 const PERSIST_DELAY_MS = 300;
+const QUICK_START_KEY = "standpunktprotokoll-quick-start-done";
 
 function id() {
   return globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
@@ -392,17 +393,21 @@ const protocolLabel = (protocol: Protocol, language: Language) => protocol.meta.
 const countTargets = (protocol: Protocol) => protocol.stations.reduce((sum, station) => sum + station.targets.length, 0);
 
 
-function Field({ label, value, onChange, type = "text", inputMode, placeholder }: {
+function Field({ label, value, onChange, type = "text", inputMode, placeholder, signToggle = false }: {
   label: string; value: string; onChange: (value: string) => void; type?: string;
   inputMode?: "text" | "decimal" | "numeric"; placeholder?: string;
+  /** Phone decimal keypads often have no minus key: offer a ± button (frost, points below the instrument). */
+  signToggle?: boolean;
 }) {
-  const { language } = useLanguage();
+  const { language, t } = useLanguage();
   return (
-    <label className="field">
+    <label className={`field${signToggle ? " field-sign" : ""}`}>
       <span>{label}</span>
       <input type={type} inputMode={inputMode} value={value} placeholder={placeholder}
         lang={LOCALES[language]}
         onChange={(event) => onChange(event.target.value)} />
+      {signToggle ? <button type="button" className="sign-toggle" aria-label={t("toggleSign")}
+        onClick={(event) => { event.preventDefault(); onChange(value.startsWith("-") ? value.slice(1) : `-${value}`); }}>±</button> : null}
     </label>
   );
 }
@@ -449,9 +454,12 @@ function SelectField({ label, value, onChange, options, placeholder: suppliedPla
   const [open, setOpen] = useState(false);
   const placeholder = suppliedPlaceholder ?? t("select");
   const selected = options.find((option) => option.value === value);
+  const optionsRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     if (!open) return;
+    // The list opens below the field: bring it into view when the field sits at the bottom of a sheet.
+    optionsRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key === "Escape") setOpen(false);
     };
@@ -478,7 +486,7 @@ function SelectField({ label, value, onChange, options, placeholder: suppliedPla
         <span className="select-chevron" aria-hidden="true">⌄</span>
       </button>
       {open ? (
-        <div className="select-options" role="listbox" aria-label={label}>
+        <div className="select-options" role="listbox" aria-label={label} ref={optionsRef}>
           <button type="button" role="option" aria-selected={!value} className={!value ? "selected" : ""} onClick={() => choose("")}>
             <b>{placeholder}</b>
           </button>
@@ -525,12 +533,14 @@ function SuggestionField({ label, value, onChange, suggestions, onPick, inputMod
   );
 }
 
-function Modal({ title, onClose, children, wide = false, full = false }: {
+function Modal({ title, onClose, children, wide = false, full = false, keepOnBackdrop = false }: {
   title: string; onClose: () => void; children: React.ReactNode; wide?: boolean; full?: boolean;
+  /** A stray tap beside the sheet must not discard a form that already holds input. */
+  keepOnBackdrop?: boolean;
 }) {
   const { t } = useLanguage();
   return (
-    <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
+    <div className="modal-backdrop" role="presentation" onMouseDown={keepOnBackdrop ? undefined : onClose}>
       <section className={`modal ${wide ? "modal-wide" : ""} ${full ? "modal-full" : ""}`} role="dialog" aria-modal="true"
         aria-label={title} onMouseDown={(event) => event.stopPropagation()}>
         <div className="modal-handle" />
@@ -700,6 +710,7 @@ function HomeContent() {
   const [customPointTypeMode, setCustomPointTypeMode] = useState(false);
   const [customPointTypeDetail, setCustomPointTypeDetail] = useState("");
   const [logoError, setLogoError] = useState(false);
+  const [quickStartDone, setQuickStartDone] = useState(true);
   const logoInputRef = useRef<HTMLInputElement>(null);
   const [protocolsOpen, setProtocolsOpen] = useState(false);
   const [valuesOpen, setValuesOpen] = useState(false);
@@ -758,6 +769,9 @@ function HomeContent() {
       }
       if (!active) return;
       if (restored) setStore(restored);
+      let quickStartSeen = false;
+      try { quickStartSeen = localStorage.getItem(QUICK_START_KEY) === "1"; } catch { /* Show the hint again next time. */ }
+      setQuickStartDone(quickStartSeen);
       setHydrated(true);
       void navigator.storage?.persist?.().catch(() => false);
     })();
@@ -853,10 +867,22 @@ function HomeContent() {
   const brandedProtocol = useMemo<Protocol>(() => ({ ...activeProtocol, customPointTypes, companyLogo: store.companyLogo, hiddenFields: store.hiddenFields ?? [] }),
     [activeProtocol, customPointTypes, store.companyLogo, store.hiddenFields]);
   const printableProtocol = useDeferredValue(brandedProtocol);
+  const hasAnyTarget = useMemo(() => store.protocols.some((protocol) => countTargets(protocol) > 0), [store.protocols]);
+  // First-run hint: three steps, gone for good after the first target point or when dismissed.
+  const showQuickStart = !quickStartDone && !hasAnyTarget;
+  function finishQuickStart() {
+    try { localStorage.setItem(QUICK_START_KEY, "1"); } catch { /* The hint may appear once more. */ }
+    setQuickStartDone(true);
+  }
+  useEffect(() => {
+    if (!hydrated || quickStartDone || !hasAnyTarget) return;
+    try { localStorage.setItem(QUICK_START_KEY, "1"); } catch { /* Nothing to remember. */ }
+  }, [hydrated, quickStartDone, hasAnyTarget]);
   const backupNeeded = useMemo(() => {
     if (!hasMeaningfulData(store)) return false;
-    if (!store.lastBackupAt) return true;
-    return store.protocols.some((protocol) => protocol.updatedAt > store.lastBackupAt!);
+    const lastCopy = store.lastBackupAt;
+    if (!lastCopy) return true;
+    return store.protocols.some((protocol) => protocol.updatedAt > lastCopy);
   }, [store]);
 
   async function refreshSnapshots() {
@@ -1157,6 +1183,25 @@ function HomeContent() {
           <span className="autosave">{t("autosave")}</span>
         </section>
 
+        {showQuickStart ? (
+          <section className="quick-start" aria-label={t("quickStart")}>
+            <header><b>{t("quickStart")}</b><button type="button" onClick={finishQuickStart} aria-label={t("close")}>×</button></header>
+            <ol>
+              {([
+                ["quickStep1", "quickStep1Detail", Boolean(activeProtocol.meta.project.trim())],
+                ["quickStep2", "quickStep2Detail", Boolean(activeProtocol.stations[0]?.point.trim() && activeProtocol.stations[0]?.instrumentHeight.trim())],
+                ["quickStep3", "quickStep3Detail", false],
+              ] as const).map(([title, detail, done], index) => (
+                <li key={title} className={done ? "done" : ""}>
+                  <span aria-hidden="true">{done ? "✓" : index + 1}</span>
+                  <div><b>{t(title)}</b><small>{t(detail)}</small></div>
+                </li>
+              ))}
+            </ol>
+            <p>{t("quickStartMore")}</p>
+          </section>
+        ) : null}
+
         <Disclosure className="card project-card" startOpen>
           <summary>
             <span><span className="step-number">01</span><span><b>{t("projectData")}</b><small>{activeProtocol.meta.project || t("fillProject")}</small></span></span>
@@ -1169,7 +1214,7 @@ function HomeContent() {
             {showField("startTime") ? <LocalizedDateTimeField key={`time-${activeProtocol.id}-${language}`} label={t("start")} kind="time" value={activeProtocol.meta.startTime} onChange={(value) => updateMeta("startTime", value)} /> : null}
             {showField("instrument") ? <Field label={t("instrument")} value={activeProtocol.meta.instrument} onChange={(value) => updateMeta("instrument", value)} placeholder={t("exampleInstrument")} /> : null}
             {showField("crew") ? <Field label={t("crew")} value={activeProtocol.meta.crew} onChange={(value) => updateMeta("crew", value)} placeholder={t("namesPlaceholder")} /> : null}
-            {showField("temperature") ? <Field label={t("temperature") + " [°C]"} inputMode="decimal" value={activeProtocol.meta.temperature} onChange={(value) => updateMeta("temperature", value)} /> : null}
+            {showField("temperature") ? <Field label={t("temperature") + " [°C]"} inputMode="decimal" signToggle value={activeProtocol.meta.temperature} onChange={(value) => updateMeta("temperature", value)} /> : null}
             {showField("pressure") ? <Field label={t("pressure") + " [hPa]"} inputMode="decimal" value={activeProtocol.meta.pressure} onChange={(value) => updateMeta("pressure", value)} /> : null}
             {showField("fpSynced") ? <Field label={t("fpStatus")} value={activeProtocol.meta.fpSynced} onChange={(value) => updateMeta("fpSynced", value)} placeholder={t("statusPlaceholder")} /> : null}
             {showField("fpFile") ? <Field label={t("fpFile")} value={activeProtocol.meta.fpFile} onChange={(value) => updateMeta("fpFile", value)} placeholder={t("filePlaceholder")} /> : null}
@@ -1234,12 +1279,7 @@ function HomeContent() {
                             <button className="target-main" type="button" onClick={() => openEditTarget(station.id, target)}>
                               <b className="target-name">{target.point}{target.isBacksight ? <em className="rb-badge">{abbreviation("RB", language)}</em> : null}{target.isConnectionPoint ? <em className="ap-badge">{abbreviation("AP", language)}</em> : null}{target.pointType ? <em className="point-type-badge">{abbreviation(target.pointType, language)}</em> : null}</b><span>h {target.height || "—"} m · {prismAbbreviation(target.remark, language) || t("noRemark")}</span>
                             </button>
-                            <button className="row-action" type="button" onClick={() => openEditTarget(station.id, target)}>{t("edit")}</button>
-                            <button className="row-action danger" type="button" onClick={() => setDeleteRequest({
-                              kind: "target", stationId: station.id, targetId: target.id,
-                              label: target.point || `${t("target")} ${targetIndex + 1}`,
-                              stationLabel: station.point || `${t("station")} ${stationIndex + 1}`,
-                            })} aria-label={t("deleteItem", {name: target.point})}>×</button>
+                            <span className="row-chevron" aria-hidden="true">›</span>
                           </li>
                         ))}
                       </ol>
@@ -1257,7 +1297,7 @@ function HomeContent() {
                       kind: "station", stationId: station.id,
                       label: station.point || `${t("station")} ${stationIndex + 1}`,
                       targetCount: station.targets.length,
-                    })}>{t("deleteStation")}</button><span>{t("changesSaved")}</span></div>
+                    })}>{t("deleteStation")}</button></div>
                   </div>
                 </Disclosure>
               </div>
@@ -1288,7 +1328,7 @@ function HomeContent() {
                 <fieldset className="page-weather-fields" key={sheet.key}>
                   <legend>{t("pageNumber", { page: index + 2, total: following.length + 1 })}{` · ${t("station")}: ${sheet.station?.point || "—"}`}</legend>
                   <LocalizedDateTimeField key={`sheet-time-${sheet.key}-${language}`} label={t("stationTime")} kind="time" value={sheet.meta.startTime} onChange={(value) => { if (sheet.station) updateStation(sheet.station.id, { startTime: value }); }} />
-                  {showField("temperature") ? <Field label={t("temperature") + " [°C]"} inputMode="decimal" value={sheet.meta.temperature} onChange={(value) => updateActive(protocol => ({ ...protocol, pageConditions: { ...protocol.pageConditions, [sheet.key]: { ...protocol.pageConditions?.[sheet.key], temperature: value } } }))} /> : null}
+                  {showField("temperature") ? <Field label={t("temperature") + " [°C]"} inputMode="decimal" signToggle value={sheet.meta.temperature} onChange={(value) => updateActive(protocol => ({ ...protocol, pageConditions: { ...protocol.pageConditions, [sheet.key]: { ...protocol.pageConditions?.[sheet.key], temperature: value } } }))} /> : null}
                   {showField("pressure") ? <Field label={t("pressure") + " [hPa]"} inputMode="decimal" value={sheet.meta.pressure} onChange={(value) => updateActive(protocol => ({ ...protocol, pageConditions: { ...protocol.pageConditions, [sheet.key]: { ...protocol.pageConditions?.[sheet.key], pressure: value } } }))} /> : null}
                 </fieldset>
               ))}
@@ -1300,13 +1340,14 @@ function HomeContent() {
       ) : null}
 
       {targetSheet ? (
-        <Modal title={targetSheet.targetId ? t("editTarget") : t("newTarget")} onClose={() => setTargetSheet(null)}>
+        <Modal title={targetSheet.targetId ? t("editTarget") : t("newTarget")} onClose={() => setTargetSheet(null)} keepOnBackdrop={Boolean(targetForm.point.trim())}>
           <div className="modal-scroll">
             {recentCombinations.length ? (
               <div className="recent-block"><p>{t("recent")}</p><div className="recent-chips">
                 {recentCombinations.map((item) => (
                   <button type="button" key={item.id} onClick={() => {
                     setCustomRemarkMode(false);
+                    setCustomPointTypeMode(Boolean(item.pointType && !knownPointType(item.pointType)));
                     setTargetForm({
                       point: item.point, height: item.height, remark: item.remark, pointType: item.pointType,
                       isBacksight: item.isBacksight, isConnectionPoint: item.isConnectionPoint,
@@ -1339,9 +1380,22 @@ function HomeContent() {
               {customRemarkMode ? (
                 <SuggestionField label={t("customRemark")} value={targetForm.remark} onChange={(remark) => setTargetForm((form) => ({ ...form, remark }))} suggestions={remarkSuggestions} placeholder={t("remarkPlaceholder")} />
               ) : null}
+              {targetSheet.targetId ? (
+                <button type="button" className="sheet-delete" onClick={() => {
+                  const station = activeProtocol.stations.find((entry) => entry.id === targetSheet.stationId);
+                  if (!station || !targetSheet.targetId) return;
+                  const stationIndex = activeProtocol.stations.indexOf(station);
+                  setDeleteRequest({
+                    kind: "target", stationId: station.id, targetId: targetSheet.targetId,
+                    label: targetForm.point.trim() || t("target"),
+                    stationLabel: station.point || `${t("station")} ${stationIndex + 1}`,
+                  });
+                  setTargetSheet(null);
+                }}>{t("deleteTarget")}</button>
+              ) : null}
             </div>
           </div>
-          <div className="modal-actions"><button type="button" className="secondary-button" onClick={() => setTargetSheet(null)}>{t("cancel")}</button><button type="button" className="primary-button" disabled={!targetForm.point.trim()} onClick={saveTarget}>{t("saveTarget")}</button></div>
+          <div className="modal-actions"><button type="button" className="secondary-button" onClick={() => setTargetSheet(null)}>{t("cancel")}</button><button type="button" className="primary-button" disabled={!targetForm.point.trim()} onClick={saveTarget}>{t("save")}</button></div>
         </Modal>
       ) : null}
 
@@ -1472,7 +1526,6 @@ function HomeContent() {
             <section className="about-app help-about">
               <div className="about-brand"><span className="brand-mark" aria-hidden="true" /><div><h3>{t("appTitle")}</h3><p>{t("version", {version: APP_VERSION})}</p></div></div>
               <section><h4>{t("about")}</h4><p>{t("author")}</p><p className="copyright">{t("copyright")}</p><p>{t("usageTerms")}</p><p>{t("restrictions")}</p></section>
-              <section><h4>{t("install")}</h4><p><b>iPhone:</b> {t("iphoneInstall")}</p><p><b>Android:</b> {t("androidInstall")}</p><p>{t("offlineInstall")}</p></section>
             </section>
           </InstructionGuide>
           <div className="modal-actions single"><button type="button" className="primary-button" onClick={() => setInstructionOpen(false)}>{t("close")}</button></div>
