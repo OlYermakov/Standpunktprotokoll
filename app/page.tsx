@@ -1204,7 +1204,7 @@ function HomeContent() {
 
         <Disclosure className="card project-card" startOpen>
           <summary>
-            <span><span className="step-number">01</span><span><b>{t("projectData")}</b><small>{activeProtocol.meta.project || t("fillProject")}</small></span></span>
+            <span><span className="step-number" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M7 3h8l4 4v14H7z" /><path d="M15 3v4h4M10 12h6M10 16h6" /></svg></span><span><b>{t("projectData")}</b><small>{activeProtocol.meta.project || t("fillProject")}</small></span></span>
             <span className="chevron">⌄</span>
           </summary>
           <div className="form-grid">
@@ -1249,7 +1249,7 @@ function HomeContent() {
 
         <section className="stations-section">
           <div className="section-heading">
-            <div><span className="step-number">02</span><span><h2>{t("stations")}</h2><p>{t("stationDetail")}</p></span></div>
+            <div><span className="step-number" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="6" r="2.5" /><path d="M12 8.5V18M12 12l-5 9M12 12l5 9" /></svg></span><span><h2>{t("stations")}</h2><p>{t("stationDetail")}</p></span></div>
             <button className="secondary-button desktop-add" type="button" onClick={addStation}>{t("newStation")}</button>
           </div>
           <div className="station-list">
@@ -1257,7 +1257,7 @@ function HomeContent() {
               <div ref={stationIndex === activeProtocol.stations.length - 1 ? lastStationRef : undefined} key={station.id}>
                 <Disclosure className="card station-card" startOpen={stationIndex === activeProtocol.stations.length - 1}>
                   <summary>
-                    <span className="station-summary"><span className="station-index">{String(stationIndex + 1).padStart(2, "0")}</span>
+                    <span className="station-summary"><span className="station-index">{t("stationLetter")}{stationIndex + 1}</span>
                       <span><b>{station.point || `${t("station")} ${stationIndex + 1}`}</b><small>{countLabel(station.targets.length, "target", language)}</small></span>
                     </span><span className="chevron">⌄</span>
                   </summary>

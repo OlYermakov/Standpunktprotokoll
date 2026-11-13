@@ -766,3 +766,5 @@ details[open] > summary .chevron { transform: rotate(180deg); }
 .quick-start li.done > span { color: #fff; background: var(--green, var(--primary)); }
 .quick-start li.done b { color: var(--muted); text-decoration: line-through; }
 .quick-start p { margin: 8px 0 0; color: var(--muted); font-size: 13px; }
+
+.step-number svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }

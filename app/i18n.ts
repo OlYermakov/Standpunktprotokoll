@@ -167,6 +167,7 @@ export const MESSAGES = {
   quickStep3: ["Zielpunkte hinzufügen", "Add target points", "Añade puntos visados", "Aggiungi i punti collimati", "Додайте цільові пункти"],
   quickStep3Detail: ["orangefarbene Taste unten", "orange button at the bottom", "botón naranja de abajo", "pulsante arancione in basso", "помаранчева кнопка внизу"],
   quickStartMore: ["Mehr dazu: Menü → Hilfe", "More: Menu → Help", "Más información: Menú → Ayuda", "Altre informazioni: Menu → Guida", "Докладніше: Меню → Довідка"],
+  stationLetter: ["S", "S", "E", "S", "С"],
   toggleSign: ["Vorzeichen wechseln", "Change sign", "Cambiar signo", "Cambia segno", "Змінити знак"],
   fileBackup: ["Kopie in „Dateien“ / iCloud", "Backup in Files / iCloud", "Copia en Archivos / iCloud", "Copia in File / iCloud", "Копія у «Файли» / iCloud"],
   lastBackup: ["Letzte Kopie", "Last backup", "Última copia", "Ultima copia", "Остання копія"],
