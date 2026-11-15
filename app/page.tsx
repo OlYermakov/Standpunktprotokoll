@@ -38,6 +38,8 @@ type ThemeChoice = UiTheme | "auto";
 const CUSTOM_REMARK = "__custom__";
 const CUSTOM_POINT_TYPE = "__custom_point_type__";
 const LOGO_MAX_PX = 900;
+/** The menu reminds again only for changes made this long after the last saved copy. */
+const BACKUP_REMINDER_AFTER_MS = 7 * 24 * 60 * 60 * 1000;
 const APP_VERSION = "1.2.0";
 const FIELD_LABELS: Record<HideableField, MessageKey> = {
   projectNumber: "projectNumber", startTime: "start", instrument: "instrument", crew: "crew",
@@ -407,7 +409,7 @@ function Field({ label, value, onChange, type = "text", inputMode, placeholder, 
         lang={LOCALES[language]}
         onChange={(event) => onChange(event.target.value)} />
       {signToggle ? <button type="button" className="sign-toggle" aria-label={t("toggleSign")}
-        onClick={(event) => { event.preventDefault(); onChange(value.startsWith("-") ? value.slice(1) : `-${value}`); }}>±</button> : null}
+        onClick={(event) => { event.preventDefault(); onChange(value.startsWith("-") ? value.slice(1) : `-${value}`); }}><span aria-hidden="true">+</span><span className="sign-slash" aria-hidden="true">/</span><span aria-hidden="true">−</span></button> : null}
     </label>
   );
 }
@@ -882,7 +884,9 @@ function HomeContent() {
     if (!hasMeaningfulData(store)) return false;
     const lastCopy = store.lastBackupAt;
     if (!lastCopy) return true;
-    return store.protocols.some((protocol) => protocol.updatedAt > lastCopy);
+    // A saved copy exists: remind only for changes made more than a week after that copy.
+    const copyTime = Date.parse(lastCopy);
+    return store.protocols.some((protocol) => Date.parse(protocol.updatedAt) - copyTime >= BACKUP_REMINDER_AFTER_MS);
   }, [store]);
 
   async function refreshSnapshots() {
@@ -1528,7 +1532,6 @@ function HomeContent() {
               <section><h4>{t("about")}</h4><p>{t("author")}</p><p className="copyright">{t("copyright")}</p><p>{t("usageTerms")}</p><p>{t("restrictions")}</p></section>
             </section>
           </InstructionGuide>
-          <div className="modal-actions single"><button type="button" className="primary-button" onClick={() => setInstructionOpen(false)}>{t("close")}</button></div>
         </Modal>
       ) : null}
 
@@ -1629,7 +1632,6 @@ function HomeContent() {
               ) : <p className="helper-text">{t("noCustomPointTypes")}</p>}
             </section>
           </div>
-          <div className="modal-actions single"><button type="button" className="primary-button" onClick={() => setSettingsOpen(false)}>{t("close")}</button></div>
         </Modal>
       ) : null}
 
