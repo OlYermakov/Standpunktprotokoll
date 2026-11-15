@@ -4,11 +4,11 @@ import test from "node:test";
 import ts from "typescript";
 import { LANGUAGES, MESSAGES, LANGUAGE_STORAGE_KEY, remarkChoices, pointTypeChoices, translate, formatDate, countLabel } from "../app/i18n.ts";
 
-test("every app message has five translations with matching interpolation parameters", () => {
-  assert.deepEqual(LANGUAGES,["de","en","es","it","uk"]);
+test("every app message has seven translations with matching interpolation parameters", () => {
+  assert.deepEqual(LANGUAGES,["de","en","es","it","uk","fr","pl"]);
   const tokens=text=>[...text.matchAll(/\{(\w+)\}/g)].map(match=>match[1]).sort();
   for (const [key,row] of Object.entries(MESSAGES)) {
-    assert.equal(row.length,5,key);
+    assert.equal(row.length,7,key);
     for (const value of row) {
       assert.ok(value.trim(),key);
       assert.deepEqual(tokens(value),tokens(row[0]),key);
@@ -22,6 +22,12 @@ test("formats display dates and counts without changing stored values or point c
   assert.equal(countLabel(1,"station","uk"),"1 станція");
   assert.equal(countLabel(2,"station","uk"),"2 станції");
   assert.equal(countLabel(11,"station","uk"),"11 станцій");
+  assert.equal(formatDate("2026-09-14","pl"),"14.09.2026");
+  assert.equal(formatDate("2026-09-14","fr"),"14/09/2026");
+  assert.equal(countLabel(1,"station","pl"),"1 stanowisko");
+  assert.equal(countLabel(3,"station","pl"),"3 stanowiska");
+  assert.equal(countLabel(5,"station","pl"),"5 stanowisk");
+  assert.equal(countLabel(2,"target","fr"),"2 points visés");
   for(const language of LANGUAGES){
     assert.deepEqual(pointTypeChoices(language).map(x=>x.value),["GVP","BGVP","BVP","GKP","SP","PS0","PS1","PS2","PS3"]);
     assert.deepEqual(remarkChoices(language).map(x=>x.value),remarkChoices("de").map(x=>x.value));

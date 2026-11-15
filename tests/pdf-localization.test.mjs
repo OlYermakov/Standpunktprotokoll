@@ -80,7 +80,7 @@ test("prism selection preserves constants and canonical values through repeated 
 });
 
 test("localized badges and PDF remarks preserve canonical codes and free text",()=>{
-  const expected={de:["GVP","BGVP","GKP","SP","RB","AP"],en:["TRP","GTRP","TCP","ST","BS","CP"],es:["PRV","PRVS","PCV","EST","VE","PA"],it:["PRB","PRBT","PCB","ST","MI","PA"],uk:["ПЗК","ҐПЗК","ПКК","СТ","ЗН","ПП"]};
+  const expected={de:["GVP","BGVP","GKP","SP","RB","AP"],en:["TRP","GTRP","TCP","ST","BS","CP"],es:["PRV","PRVS","PCV","EST","VE","PA"],it:["PRB","PRBT","PCB","ST","MI","PA"],uk:["ПЗК","ҐПЗК","ПКК","СТ","ЗН","ПП"],fr:["PRV","PRVS","PCV","ST","VA","PR"],pl:["POT","GPOT","PKT","ST","WS","PN"]};
   for(const language of LANGUAGES){
     assert.deepEqual(["GVP","BGVP","GKP","SP","RB","AP"].map(code=>abbreviation(code,language)),expected[language]);
     for(const code of ["PS0","PS1","PS2","PS3","Custom Пункт"]) assert.equal(abbreviation(code,language),code);

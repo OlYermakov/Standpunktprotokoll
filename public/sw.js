@@ -1,13 +1,13 @@
 const CACHE_NAME = "standpunktprotokoll-multilingual-v36";
 const APP_SHELL = [
-  "/manifest-de.webmanifest", "/manifest-en.webmanifest", "/manifest-es.webmanifest", "/manifest-it.webmanifest", "/manifest-uk.webmanifest",
+  "/manifest-de.webmanifest", "/manifest-en.webmanifest", "/manifest-es.webmanifest", "/manifest-it.webmanifest", "/manifest-uk.webmanifest", "/manifest-fr.webmanifest", "/manifest-pl.webmanifest",
   "/fonts/DejaVuSans.ttf", "/fonts/DejaVuSans-Bold.ttf",
   "/", "/?install=v22", "/manifest-v22.webmanifest", "/favicon.svg", "/icon-192-v20.png", "/icon-512-v20.png",
   "/apple-touch-icon.png", "/apple-touch-icon-v20.png", "/apple-touch-icon-167x167-v20.png",
   "/apple-touch-icon-152x152-v20.png", "/apple-touch-icon-120x120-v20.png", "/apple-touch-icon-precomposed-v20.png", "/ait-logo.png",
 ];
 const NETWORK_FIRST_ASSETS = new Set([
-  "/manifest-de.webmanifest", "/manifest-en.webmanifest", "/manifest-es.webmanifest", "/manifest-it.webmanifest", "/manifest-uk.webmanifest",
+  "/manifest-de.webmanifest", "/manifest-en.webmanifest", "/manifest-es.webmanifest", "/manifest-it.webmanifest", "/manifest-uk.webmanifest", "/manifest-fr.webmanifest", "/manifest-pl.webmanifest",
   "/manifest-v22.webmanifest", "/icon-192-v20.png", "/icon-512-v20.png", "/apple-touch-icon.png",
   "/apple-touch-icon-v20.png", "/apple-touch-icon-167x167-v20.png", "/apple-touch-icon-152x152-v20.png",
   "/apple-touch-icon-120x120-v20.png", "/apple-touch-icon-precomposed-v20.png",
