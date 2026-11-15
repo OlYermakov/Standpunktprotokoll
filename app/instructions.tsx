@@ -30,7 +30,7 @@ const GUIDE: readonly Section[] = [
     title: ["Projektdaten", "Project details", "Datos del proyecto", "Dati del progetto", "Дані проєкту"],
     steps: [
       ["Projekt, Datum und nach Bedarf Nummer, Instrument, Messtrupp, Temperatur und Luftdruck eintragen.", "Enter the project, date and, as needed, number, instrument, crew, temperature and air pressure.", "Introduce proyecto, fecha y, si hace falta, número, instrumento, equipo, temperatura y presión.", "Inserisci progetto, data e, se servono, numero, strumento, squadra, temperatura e pressione.", "Впишіть проєкт, дату і за потреби номер, прилад, бригаду, температуру й тиск."],
-      ["Minusgrade: Zahl eingeben und rechts im Feld „±“ antippen.", "Below zero: type the number, then tap “±” on the right of the field.", "Bajo cero: escribe el número y toca «±» a la derecha del campo.", "Sotto zero: scrivi il numero e tocca «±» a destra del campo.", "Мороз: введіть число й торкніться «±» праворуч у полі."],
+      ["Minusgrade: Zahl eingeben und rechts im Feld „+ / −“ antippen.", "Below zero: type the number, then tap “+ / −” on the right of the field.", "Bajo cero: escribe el número y toca «+ / −» a la derecha del campo.", "Sotto zero: scrivi il numero e tocca «+ / −» a destra del campo.", "Мороз: введіть число й торкніться «+ / −» праворуч у полі."],
       ["Nicht benötigte Felder lassen sich unter Menü → „{settings}“ ausblenden.", "Fields you do not need can be hidden in Menu → “{settings}”.", "Los campos que no necesites se ocultan en Menú → «{settings}».", "I campi che non ti servono si nascondono in Menu → «{settings}».", "Непотрібні поля можна приховати: Меню → «{settings}»."],
     ],
   },

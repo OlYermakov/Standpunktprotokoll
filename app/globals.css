@@ -361,6 +361,7 @@ details[open] > summary .chevron { transform: rotate(180deg); }
 .modal-header h2 { margin: 0; font-size: 20px; letter-spacing: -0.025em; }
 .close-button { width: 44px; height: 44px; border: 0; border-radius: 13px; color: var(--muted); background: var(--surface-soft); font-size: 26px; line-height: 1; }
 .modal-scroll { min-height: 0; padding: 18px 20px; overflow: auto; overscroll-behavior: contain; }
+.modal-scroll:last-child { padding-bottom: calc(18px + env(safe-area-inset-bottom)); }
 .modal-actions { flex: none; display: grid; grid-template-columns: 0.8fr 1.2fr; gap: 9px; padding: 12px 20px calc(12px + env(safe-area-inset-bottom)); border-top: 1px solid var(--line); background: var(--surface); }
 .modal-actions.single { grid-template-columns: 1fr; }
 .about-app { display: grid; gap: 14px; }
@@ -568,6 +569,7 @@ details[open] > summary .chevron { transform: rotate(180deg); }
   .modal-handle { display: block; width: 42px; height: 5px; margin: 8px auto 0; border-radius: 999px; background: var(--line-strong); }
   .modal-header { min-height: 60px; padding-top: 8px; }
   .modal-scroll { padding: 15px 14px; }
+  .modal-scroll:last-child { padding-bottom: calc(15px + env(safe-area-inset-bottom)); }
   .modal-actions { padding-left: 14px; padding-right: 14px; }
   .recent-chips { margin-right: -14px; padding-right: 14px; }
   .backup-actions { grid-template-columns: 1fr; }
@@ -738,8 +740,9 @@ details[open] > summary .chevron { transform: rotate(180deg); }
 /* Lists inside sheets never grow wider than the sheet (long names used to push the row actions off-screen). */
 .protocol-browser, .values-browser, .saved-list, .snapshot-list { grid-template-columns: minmax(0, 1fr); }
 .field-sign { position: relative; }
-.field-sign input { padding-right: 58px; }
-.sign-toggle { position: absolute; right: 6px; bottom: 6px; width: 44px; height: 40px; border: 0; border-radius: 10px; color: var(--ink); background: var(--surface-soft); font-size: 18px; font-weight: 700; }
+.field-sign input { padding-right: 76px; }
+.sign-toggle { position: absolute; right: 6px; bottom: 6px; width: 62px; height: 40px; display: inline-flex; align-items: center; justify-content: center; gap: 4px; border: 0; border-radius: 10px; color: var(--ink); background: var(--surface-soft); font-size: 18px; font-weight: 700; }
+.sign-toggle .sign-slash { color: var(--muted); font-weight: 400; }
 
 /* Target rows: the whole row opens the editor; deleting lives inside the editor. */
 .target-list li { grid-template-columns: auto minmax(0, 1fr) auto; }
