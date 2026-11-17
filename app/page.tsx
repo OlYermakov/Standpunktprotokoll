@@ -162,16 +162,18 @@ function createStation(): Station {
   };
 }
 
-function createProtocol(carry?: Protocol): Protocol {
+/** "continue" keeps the project data of `carry`; "new" keeps only the instrument. */
+function createProtocol(carry?: Protocol, mode: "continue" | "new" = "continue"): Protocol {
   const timestamp = nowIso();
+  const project = mode === "continue" ? carry : undefined;
   return {
     id: id(), createdAt: timestamp, updatedAt: timestamp,
     meta: {
-      project: carry?.meta.project ?? "", projectNumber: carry?.meta.projectNumber ?? "",
+      project: project?.meta.project ?? "", projectNumber: project?.meta.projectNumber ?? "",
       date: localDate(), startTime: localTime(), endTime: "",
-      instrument: carry?.meta.instrument ?? "", crew: carry?.meta.crew ?? "",
-      temperature: "", pressure: "", fpSynced: carry?.meta.fpSynced ?? "",
-      fpFile: carry?.meta.fpFile ?? "", showCompanyLogo: true,
+      instrument: carry?.meta.instrument ?? "", crew: project?.meta.crew ?? "",
+      temperature: "", pressure: "", fpSynced: project?.meta.fpSynced ?? "",
+      fpFile: project?.meta.fpFile ?? "", showCompanyLogo: true,
     },
     stations: [createStation()],
   };
@@ -512,15 +514,17 @@ function SuggestionField({ label, value, onChange, suggestions, onPick, inputMod
 }) {
   const { t } = useLanguage();
   const [open, setOpen] = useState(false);
+  // Filter only by what was typed after focusing, so a prefilled value still shows the whole list.
+  const [typed, setTyped] = useState(false);
   const options = suggestions
-    .filter((item) => !value || item.toLocaleLowerCase().includes(value.toLocaleLowerCase()))
+    .filter((item) => !typed || !value || item.toLocaleLowerCase().includes(value.toLocaleLowerCase()))
     .slice(0, maxSuggestions);
   return (
     <label className="field suggestion-field">
       <span>{label}</span>
       <input autoFocus={autoFocus} inputMode={inputMode} value={value} placeholder={placeholder} autoComplete="off"
-        onFocus={() => setOpen(true)} onBlur={() => window.setTimeout(() => setOpen(false), 120)}
-        onChange={(event) => { onChange(event.target.value); setOpen(true); }} />
+        onFocus={() => { setTyped(false); setOpen(true); }} onBlur={() => window.setTimeout(() => setOpen(false), 120)}
+        onChange={(event) => { onChange(event.target.value); setTyped(true); setOpen(true); }} />
       {open && options.length > 0 ? (
         <div className="suggestions" role="listbox" aria-label={t("savedSuggestions", {label})}>
           {options.map((option) => (
@@ -715,6 +719,7 @@ function HomeContent() {
   const [quickStartDone, setQuickStartDone] = useState(true);
   const logoInputRef = useRef<HTMLInputElement>(null);
   const [protocolsOpen, setProtocolsOpen] = useState(false);
+  const [newProtocolChoiceOpen, setNewProtocolChoiceOpen] = useState(false);
   const [valuesOpen, setValuesOpen] = useState(false);
   const [instructionOpen, setInstructionOpen] = useState(false);
   const [backupOpen, setBackupOpen] = useState(false);
@@ -836,6 +841,15 @@ function HomeContent() {
   }, [hydrated, store]);
 
   const activeProtocol = store.protocols.find((protocol) => protocol.id === store.activeProtocolId) ?? store.protocols[0];
+  /** Instruments from earlier records, most recently edited first. */
+  const instrumentSuggestions = useMemo(() => {
+    const current = activeProtocol.meta.instrument.trim();
+    const seen = new Set<string>();
+    return [...store.protocols]
+      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+      .map((protocol) => protocol.meta.instrument.trim())
+      .filter((name) => name && name !== current && !seen.has(name) && Boolean(seen.add(name)));
+  }, [store.protocols, activeProtocol.meta.instrument]);
   const pointSuggestions = useMemo(() => uniqueValues(store.savedCombinations, "point"), [store.savedCombinations]);
   const heightSuggestions = useMemo(() => uniqueValues(store.savedCombinations, "height"), [store.savedCombinations]);
   const remarkSuggestions = useMemo(() => uniqueValues(store.savedCombinations, "remark"), [store.savedCombinations]);
@@ -1116,11 +1130,19 @@ function HomeContent() {
     setDeleteRequest(null);
   }
 
-  function startNewProtocol() {
-    const next = createProtocol(activeProtocol);
+  function createNewProtocol(mode: "continue" | "new") {
+    const next = createProtocol(activeProtocol, mode);
     setStore((current) => ({ ...current, activeProtocolId: next.id, protocols: [next, ...current.protocols] }));
+    setNewProtocolChoiceOpen(false);
     setProtocolsOpen(false);
     window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  /** Ask whether to continue the current project; with no project name there is nothing to continue. */
+  function startNewProtocol() {
+    setProtocolsOpen(false);
+    if (!activeProtocol.meta.project.trim()) { createNewProtocol("new"); return; }
+    setNewProtocolChoiceOpen(true);
   }
 
   function selectProtocol(protocolId: string) {
@@ -1216,7 +1238,7 @@ function HomeContent() {
             {showField("projectNumber") ? <Field label={t("projectNumber")} value={activeProtocol.meta.projectNumber} onChange={(value) => updateMeta("projectNumber", value)} placeholder={t("exampleNumber")} /> : null}
             <LocalizedDateTimeField key={`date-${activeProtocol.id}-${language}`} label={t("date")} kind="date" value={activeProtocol.meta.date} onChange={(value) => updateMeta("date", value)} />
             {showField("startTime") ? <LocalizedDateTimeField key={`time-${activeProtocol.id}-${language}`} label={t("start")} kind="time" value={activeProtocol.meta.startTime} onChange={(value) => updateMeta("startTime", value)} /> : null}
-            {showField("instrument") ? <Field label={t("instrument")} value={activeProtocol.meta.instrument} onChange={(value) => updateMeta("instrument", value)} placeholder={t("exampleInstrument")} /> : null}
+            {showField("instrument") ? <SuggestionField label={t("instrument")} value={activeProtocol.meta.instrument} onChange={(value) => updateMeta("instrument", value)} suggestions={instrumentSuggestions} maxSuggestions={Infinity} placeholder={t("exampleInstrument")} /> : null}
             {showField("crew") ? <Field label={t("crew")} value={activeProtocol.meta.crew} onChange={(value) => updateMeta("crew", value)} placeholder={t("namesPlaceholder")} /> : null}
             {showField("temperature") ? <Field label={t("temperature") + " [°C]"} inputMode="decimal" signToggle value={activeProtocol.meta.temperature} onChange={(value) => updateMeta("temperature", value)} /> : null}
             {showField("pressure") ? <Field label={t("pressure") + " [hPa]"} inputMode="decimal" value={activeProtocol.meta.pressure} onChange={(value) => updateMeta("pressure", value)} /> : null}
@@ -1427,10 +1449,6 @@ function HomeContent() {
       {protocolsOpen ? (
         <Modal title={t("protocols")} onClose={() => setProtocolsOpen(false)} wide>
           <div className="modal-scroll protocol-browser">
-            <button className="backup-entry-card" type="button" onClick={openBackupCenter}>
-              <span>↥</span><b>{t("dataProtection")}</b><small>{t("backupSummary")} · {formatBackupDate(store.lastBackupAt, language)}</small><em>›</em>
-            </button>
-            <button className="new-protocol-card" type="button" onClick={startNewProtocol}><span>＋</span><b>{t("newProtocol")}</b><small>{t("carryHint")}</small></button>
             {[...store.protocols].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).map((protocol) => (
               <article className={`protocol-row ${protocol.id === activeProtocol.id ? "active" : ""}`} key={protocol.id}>
                 <button type="button" className="protocol-select" onClick={() => selectProtocol(protocol.id)}><b>{protocolLabel(protocol, language)}</b><span>{formatDate(protocol.meta.date, language)} · {countLabel(protocol.stations.length, "station", language)} · {countLabel(countTargets(protocol), "target", language)}</span></button>
@@ -1443,7 +1461,7 @@ function HomeContent() {
       ) : null}
 
       {backupOpen ? (
-        <Modal title={t("dataProtection")} onClose={() => setBackupOpen(false)} wide>
+        <Modal title={t("backupMenu")} onClose={() => setBackupOpen(false)} wide>
           <div className="modal-scroll backup-center">
             <section className="backup-status-card">
               <span className="backup-shield" aria-hidden="true">✓</span>
@@ -1583,6 +1601,22 @@ function HomeContent() {
                 ))}
               </div>
             </div>
+          </div>
+        </Modal>
+      ) : null}
+
+      {newProtocolChoiceOpen ? (
+        <Modal title={t("newProtocol")} onClose={() => setNewProtocolChoiceOpen(false)}>
+          <div className="modal-scroll new-protocol-choice">
+            <p className="helper-text">{t("newProtocolFreshHint")}</p>
+            <button type="button" className="choice-card choice-card-primary" onClick={() => createNewProtocol("continue")}>
+              <span aria-hidden="true">↻</span>
+              <span><b>{t("continueProject")}</b><small>{t("continueProjectDetail", { project: activeProtocol.meta.project.trim() })}</small></span>
+            </button>
+            <button type="button" className="choice-card" onClick={() => createNewProtocol("new")}>
+              <span aria-hidden="true">＋</span>
+              <span><b>{t("newProject")}</b><small>{t("newProjectDetail")}</small></span>
+            </button>
           </div>
         </Modal>
       ) : null}
